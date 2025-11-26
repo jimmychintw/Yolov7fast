@@ -1,6 +1,6 @@
 # 專案進度報告
 
-## 目前狀態：訓練環境設定完成，ready to train
+## 目前狀態：vast.ai 環境設定完成，待上傳資料集
 
 ### 已完成項目
 
@@ -13,9 +13,11 @@
 | 2025-11-25 | 進度追蹤 | 建立 progress.md 進度報告機制 |
 | 2025-11-26 | COCO 資料集 | 確認本地有 320x320 版本 (5.9GB, 118287 張) |
 | 2025-11-26 | 多解析度支援 | 建立 coco320/480/640 目錄結構與設定檔 |
-| 2025-11-26 | vast.ai 設定 | 設定 SSH 連線與 tmux 環境 (RTX 5090) |
-| 2025-11-26 | 監控系統 | 建立 GPU/CPU 監控腳本 (/workspace/monitor.csv) |
 | 2025-11-26 | 文檔更新 | 重寫 README.md 為簡潔版本 |
+| 2025-11-27 | vast.ai 環境 | 新 instance 設定完成 (RTX 5090 + PyTorch 2.8.0) |
+| 2025-11-27 | 程式碼修正 | 修正 test.py 硬編碼 annotations 路徑問題 |
+| 2025-11-27 | 設定文檔 | 重寫 VAST_SETUP.md 為一鍵設定指南 |
+| 2025-11-27 | 清理 | 刪除空的 coco/ 目錄 |
 
 ### 目前專案結構
 
@@ -26,7 +28,6 @@ Yolov7fast/
 │   ├── yolov7.yaml
 │   └── ...
 ├── data/                  # 資料集配置
-│   ├── coco.yaml         # 原版 COCO (空)
 │   ├── coco320.yaml      # 320x320 (有資料)
 │   ├── coco480.yaml      # 480x480 (空)
 │   └── coco640.yaml      # 640x640 (空)
@@ -37,35 +38,37 @@ Yolov7fast/
 │   └── annotations/
 ├── coco480/              # 待填入
 ├── coco640/              # 待填入
-├── .claude/commands/     # Slash commands
 ├── train.py
 ├── detect.py
 ├── test.py
 ├── CLAUDE.md
 ├── README.md
-├── VAST_SETUP.md         # vast.ai 設定文檔
+├── VAST_SETUP.md         # vast.ai 一鍵設定指南
 └── progress.md
 ```
 
 ### vast.ai 遠端環境
 
 ```
-SSH: ssh -p 21024 root@116.122.206.233 -L 8080:localhost:8080
+SSH: ssh -p 21024 root@116.122.206.233 -L 6006:localhost:6006
 GPU: RTX 5090 (32GB VRAM)
+PyTorch: 2.8.0+cu128 (支援 Blackwell sm_120)
 tmux session: vast (4 windows: train, cpu, gpu, terminal)
-監控: /workspace/monitor.csv (每秒記錄 CPU/GPU 使用率)
+TensorBoard: http://localhost:6006
 ```
 
 ### 下次繼續事項
 
-- [ ] 在 vast.ai 上下載原版 COCO 資料集
-- [ ] 準備 coco480 和 coco640 資料集
+- [ ] 上傳 coco320 資料集到 vast.ai (5.9GB)
 - [ ] 在遠端開始第一次訓練測試
 - [ ] 測試 YOLOv7-Tiny + coco320 組合
 
 ### 訓練指令參考
 
 ```bash
+# 在 vast.ai 遠端執行
+cd /workspace/Yolov7fast
+
 # YOLOv7-Tiny with 320x320 (fastest)
 python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tiny.yaml --batch-size 64 --epochs 100
 
@@ -77,15 +80,23 @@ python train.py --data data/coco640.yaml --img 640 --cfg cfg/training/yolov7.yam
 
 ## 變更歷史
 
+### 2025-11-27
+- 租用新 vast.ai instance (RTX 5090)
+- 設定 SSH key 連線
+- 安裝 PyTorch 2.8.0 + CUDA 12.8 (支援 Blackwell 架構)
+- 安裝所有依賴套件
+- Clone 專案到 /workspace/Yolov7fast
+- 建立 tmux 環境 (train, cpu, gpu, terminal)
+- 啟動 TensorBoard (port 6006)
+- 刪除空的 coco/ 目錄
+- 修正 test.py 硬編碼 annotations 路徑（改為從 data yaml 自動推導）
+- 重寫 VAST_SETUP.md 為一鍵設定指南
+
 ### 2025-11-26
 - 修正 COCO 資料集路徑設定（移除硬編碼）
 - 確認本地資料集為 320x320 版本
 - 重命名 coco → coco320
-- 建立多解析度支援：coco.yaml, coco320.yaml, coco480.yaml, coco640.yaml
-- 設定 vast.ai SSH 連線（處理 SSH key 問題）
-- 建立 tmux 環境（4 個 windows: train, cpu, gpu, terminal）
-- 建立 GPU/CPU 監控腳本
-- 建立 .claude/commands/ slash commands
+- 建立多解析度支援：coco320.yaml, coco480.yaml, coco640.yaml
 - 重寫 README.md 為簡潔版本
 - 建立 VAST_SETUP.md 設定文檔
 
