@@ -110,6 +110,48 @@ python -m torch.distributed.launch --nproc_per_node 4 --master_port 9527 train.p
 python -m torch.distributed.launch --nproc_per_node 8 --master_port 9527 train_aux.py --workers 8 --device 0,1,2,3,4,5,6,7 --sync-bn --batch-size 128 --data data/coco.yaml --img 1280 1280 --cfg cfg/training/yolov7-w6.yaml --weights '' --name yolov7-w6 --hyp data/hyp.scratch.p6.yaml
 ```
 
+### Training Parameters
+
+| Parameter | Description | Example |
+| :-- | :-- | :-- |
+| `--data` | Dataset config (path, classes) | `data/coco320.yaml` |
+| `--cfg` | Model architecture (layers, channels) | `cfg/training/yolov7-tiny.yaml` |
+| `--img` | Input image size | `320`, `640` |
+| `--weights` | Pretrained weights (optional) | `yolov7-tiny.pt` |
+| `--batch-size` | Batch size | `32` |
+| `--epochs` | Number of epochs | `100` |
+
+### Multi-Resolution COCO Datasets
+
+This project supports pre-resized COCO datasets for faster training:
+
+| Config File | Resolution | Dataset Path |
+| :-- | :-: | :-- |
+| `data/coco.yaml` | Original | `./coco/` |
+| `data/coco320.yaml` | 320x320 | `./coco320/` |
+| `data/coco480.yaml` | 480x480 | `./coco480/` |
+| `data/coco640.yaml` | 640x640 | `./coco640/` |
+
+Training with different resolutions:
+
+``` shell
+# Train with 320x320 dataset (fastest)
+python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tiny.yaml --batch-size 64
+
+# Train with 640x640 dataset (standard)
+python train.py --data data/coco640.yaml --img 640 --cfg cfg/training/yolov7.yaml --batch-size 32
+```
+
+### Model Architectures
+
+| Config | Model | Size | Speed |
+| :-- | :-- | :-: | :-: |
+| `yolov7-tiny.yaml` | YOLOv7-Tiny | Smallest | Fastest |
+| `yolov7.yaml` | YOLOv7 | Standard | Fast |
+| `yolov7x.yaml` | YOLOv7-X | Large | Medium |
+| `yolov7-w6.yaml` | YOLOv7-W6 | X-Large | Slow |
+| `yolov7-e6.yaml` | YOLOv7-E6 | XX-Large | Slowest |
+
 ## Transfer learning
 
 [`yolov7_training.pt`](https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7_training.pt) [`yolov7x_training.pt`](https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7x_training.pt) [`yolov7-w6_training.pt`](https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7-w6_training.pt) [`yolov7-e6_training.pt`](https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7-e6_training.pt) [`yolov7-d6_training.pt`](https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7-d6_training.pt) [`yolov7-e6e_training.pt`](https://github.com/WongKinYiu/yolov7/releases/download/v0.1/yolov7-e6e_training.pt)
