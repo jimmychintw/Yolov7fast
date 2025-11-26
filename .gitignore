@@ -24,3 +24,4 @@ Thumbs.db
 *.weights
 runs/
 outputs/
+coco/

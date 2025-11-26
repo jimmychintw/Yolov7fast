@@ -1247,7 +1247,7 @@ def create_folder(path='./new'):
     os.makedirs(path)  # make new output folder
 
 
-def flatten_recursive(path='../coco'):
+def flatten_recursive(path='./coco'):
     # Flatten a recursive directory by bringing all files to top level
     new_path = Path(path + '_flat')
     create_folder(new_path)
@@ -1255,7 +1255,7 @@ def flatten_recursive(path='../coco'):
         shutil.copyfile(file, new_path / Path(file).name)
 
 
-def extract_boxes(path='../coco/'):  # from utils.datasets import *; extract_boxes('../coco128')
+def extract_boxes(path='./coco/'):  # from utils.datasets import *; extract_boxes('./coco128')
     # Convert detection dataset into classification dataset, with one directory per class
 
     path = Path(path)  # images dir
@@ -1290,9 +1290,9 @@ def extract_boxes(path='../coco/'):  # from utils.datasets import *; extract_box
                     assert cv2.imwrite(str(f), im[b[1]:b[3], b[0]:b[2]]), f'box failure in {f}'
 
 
-def autosplit(path='../coco', weights=(0.9, 0.1, 0.0), annotated_only=False):
+def autosplit(path='./coco', weights=(0.9, 0.1, 0.0), annotated_only=False):
     """ Autosplit a dataset into train/val/test splits and save path/autosplit_*.txt files
-    Usage: from utils.datasets import *; autosplit('../coco')
+    Usage: from utils.datasets import *; autosplit('./coco')
     Arguments
         path:           Path to images directory
         weights:        Train, val, test weights (list)
@@ -1314,7 +1314,6 @@ def autosplit(path='../coco', weights=(0.9, 0.1, 0.0), annotated_only=False):
     
     
 def load_segmentations(self, index):
-    key = '/work/handsomejw66/coco17/' + self.img_files[index]
-    #print(key)
-    # /work/handsomejw66/coco17/
-    return self.segs[key]
+    # 使用相對路徑，基於 img_files 中的檔案名稱
+    key = self.img_files[index]
+    return self.segs.get(key, None)
