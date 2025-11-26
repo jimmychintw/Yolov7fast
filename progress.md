@@ -50,8 +50,8 @@ Yolov7fast/
 ### vast.ai 遠端環境
 
 ```
-SSH: ssh -p 60002 root@153.198.29.53
-GPU: RTX 5090
+SSH: ssh -p 21024 root@116.122.206.233 -L 8080:localhost:8080
+GPU: RTX 5090 (32GB VRAM)
 tmux session: vast (4 windows: train, cpu, gpu, terminal)
 監控: /workspace/monitor.csv (每秒記錄 CPU/GPU 使用率)
 ```

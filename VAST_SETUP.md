@@ -1,35 +1,127 @@
 # Vast.ai 遠端訓練環境設定指南
 
-## 主機資訊
+## 快速設定（一鍵腳本）
+
+租用新 instance 後，依序執行以下步驟：
+
+### Step 1: 添加 SSH Key
+
+1. 取得本機 public key：
+   ```bash
+   cat ~/.ssh/id_ed25519.pub
+   ```
+
+2. 在 vast.ai 控制台：
+   - Instance → Connect → Manage SSH Keys
+   - 貼上 public key → ADD SSH KEY
+
+### Step 2: 設定環境變數
+
+```bash
+# 根據 vast.ai 提供的連線資訊修改
+export VAST_HOST="root@116.122.206.233"
+export VAST_PORT="21024"
+```
+
+### Step 3: 一鍵安裝腳本
+
+```bash
+# 複製以下內容到終端機執行
+ssh -p $VAST_PORT $VAST_HOST -o StrictHostKeyChecking=no 'bash -s' << 'EOF'
+set -e
+echo "=== 開始設定 vast.ai 環境 ==="
+
+# 1. 升級 pip
+echo "[1/5] 升級 pip, setuptools, wheel..."
+pip install -U pip setuptools wheel --break-system-packages -q
+
+# 2. 安裝 PyTorch 2.8.0 + CUDA 12.8 (支援 RTX 5090 Blackwell 架構)
+echo "[2/5] 安裝 PyTorch 2.8.0 (CUDA 12.8)..."
+pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
+    --index-url https://download.pytorch.org/whl/cu128 \
+    --break-system-packages -q
+
+# 3. 安裝其他依賴
+echo "[3/5] 安裝其他依賴套件..."
+pip install --break-system-packages -q \
+    matplotlib opencv-python Pillow PyYAML requests scipy tqdm \
+    tensorboard torch-tb-profiler pandas seaborn ipython psutil thop pycocotools
+
+# 4. Clone 專案
+echo "[4/5] Clone YOLOv7fast 專案..."
+cd /workspace
+if [ ! -d "Yolov7fast" ]; then
+    git clone https://github.com/jimmychintw/Yolov7fast.git
+fi
+
+# 5. 建立 tmux 環境
+echo "[5/5] 建立 tmux 環境..."
+tmux kill-server 2>/dev/null || true
+tmux new -d -s vast -n train
+tmux new-window -t vast -n cpu
+tmux new-window -t vast -n gpu
+tmux new-window -t vast -n terminal
+tmux send-keys -t vast:cpu 'htop' Enter
+tmux send-keys -t vast:gpu 'watch -n 1 nvidia-smi' Enter
+
+# 驗證
+echo ""
+echo "=== 設定完成！驗證環境 ==="
+python3 -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+echo ""
+echo "專案位置: /workspace/Yolov7fast"
+tmux ls
+EOF
+```
+
+### Step 4: 啟動 TensorBoard
+
+```bash
+ssh -p $VAST_PORT $VAST_HOST "mkdir -p /workspace/Yolov7fast/runs && nohup tensorboard --logdir /workspace/Yolov7fast/runs --port 6006 --bind_all &>/dev/null &"
+```
+
+### Step 5: 連線並開始訓練
+
+```bash
+# 連線 (含 TensorBoard port forwarding)
+ssh -p $VAST_PORT $VAST_HOST -L 6006:localhost:6006
+
+# 進入 tmux
+tmux attach -t vast
+
+# 開始訓練
+cd /workspace/Yolov7fast
+python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tiny.yaml --batch-size 64 --epochs 100
+```
+
+TensorBoard: http://localhost:6006
+
+---
+
+## 套件版本（RTX 5090 專用）
+
+| 套件 | 版本 | 說明 |
+|------|------|------|
+| Python | 3.12 | vast.ai 預裝 |
+| PyTorch | 2.8.0+cu128 | 支援 Blackwell (sm_120) |
+| torchvision | 0.23.0+cu128 | |
+| torchaudio | 2.8.0+cu128 | |
+| CUDA | 12.8 | PyTorch wheel 內建 |
+
+**重要**：RTX 5090 使用 Blackwell 架構 (sm_120)，需要 PyTorch 2.8.0+ 和 CUDA 12.8+
+
+---
+
+## 主機規格參考
 
 | 項目 | 規格 |
 |------|------|
 | GPU | NVIDIA GeForce RTX 5090 (32GB VRAM) |
 | CPU | AMD Ryzen 9 7950X (32 核心) |
-| RAM | 188GB |
-| Disk | 200GB |
-| CUDA | 13.0 |
-| Driver | 580.95.05 |
+| RAM | 124GB+ |
+| Disk | 100GB+ |
 
-## SSH 連線
-
-### 連線指令
-```bash
-ssh -p 60002 root@153.198.29.53
-```
-
-### SSH Key 設定
-
-1. **本機 public key 位置**：`~/.ssh/id_ed25519.pub`
-
-2. **vast.ai 設定**：
-   - 登入 vast.ai → Account → Keys → SSH Keys
-   - 加入 public key
-
-3. **重要**：若 vast.ai 同步有問題，手動在遠端加入：
-   ```bash
-   echo "YOUR_PUBLIC_KEY" >> ~/.ssh/authorized_keys
-   ```
+---
 
 ## Tmux 環境
 
@@ -42,33 +134,7 @@ vast (session)
 └── terminal  - 一般操作
 ```
 
-### 建立指令
-```bash
-# 建立 session 和 windows
-ssh -p 60002 root@153.198.29.53 "tmux new -d -s vast -n train"
-ssh -p 60002 root@153.198.29.53 "tmux new-window -t vast -n cpu"
-ssh -p 60002 root@153.198.29.53 "tmux new-window -t vast -n gpu"
-ssh -p 60002 root@153.198.29.53 "tmux new-window -t vast -n terminal"
-
-# 啟動監控
-ssh -p 60002 root@153.198.29.53 "tmux send-keys -t vast:cpu 'htop' Enter"
-ssh -p 60002 root@153.198.29.53 "tmux send-keys -t vast:gpu 'watch -n 1 nvidia-smi' Enter"
-```
-
-### 常用操作
-```bash
-# 進入 tmux session
-ssh -p 60002 root@153.198.29.53 -t "tmux attach -t vast"
-
-# 查看特定 window 輸出
-ssh -p 60002 root@153.198.29.53 "tmux capture-pane -t vast:gpu -p"
-ssh -p 60002 root@153.198.29.53 "tmux capture-pane -t vast:cpu -p"
-
-# 在特定 window 執行指令
-ssh -p 60002 root@153.198.29.53 "tmux send-keys -t vast:terminal 'ls -la' Enter"
-```
-
-### Tmux 快捷鍵（進入 session 後）
+### 快捷鍵
 | 按鍵 | 功能 |
 |------|------|
 | `Ctrl+b` → `n` | 下一個 window |
@@ -76,77 +142,45 @@ ssh -p 60002 root@153.198.29.53 "tmux send-keys -t vast:terminal 'ls -la' Enter"
 | `Ctrl+b` → `0-3` | 跳到指定 window |
 | `Ctrl+b` → `d` | Detach（離開但不關閉） |
 
-## 背景監控系統
+---
 
-### 監控內容
-| 欄位 | 說明 |
-|------|------|
-| timestamp | ISO 格式時間戳 |
-| cpu_pct | CPU 使用率 % |
-| ram_gb | RAM 使用量 GB |
-| gpu_pct | GPU 使用率 % |
-| vram_mb | VRAM 使用量 MB |
-| gpu_temp | GPU 溫度 °C |
-| gpu_power | GPU 功耗 W |
-
-### Log 檔案位置
-```
-/workspace/monitor.csv
-```
-
-### 啟動監控腳本
-```bash
-ssh -p 60002 root@153.198.29.53 'echo "timestamp,cpu_pct,ram_gb,gpu_pct,vram_mb,gpu_temp,gpu_power" > /workspace/monitor.csv && nohup bash -c "while true; do
-  CPU=\$(top -bn1 | grep \"Cpu(s)\" | awk \"{print \\\$2}\" | cut -d\"%\" -f1)
-  RAM=\$(free -g | awk \"/Mem:/{print \\\$3}\")
-  GPU_INFO=\$(nvidia-smi --query-gpu=utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv,noheader,nounits)
-  GPU_PCT=\$(echo \$GPU_INFO | cut -d, -f1 | tr -d \" \")
-  VRAM=\$(echo \$GPU_INFO | cut -d, -f2 | tr -d \" \")
-  TEMP=\$(echo \$GPU_INFO | cut -d, -f3 | tr -d \" \")
-  POWER=\$(echo \$GPU_INFO | cut -d, -f4 | tr -d \" \")
-  echo \"\$(date +%Y-%m-%dT%H:%M:%S),\$CPU,\$RAM,\$GPU_PCT,\$VRAM,\$TEMP,\$POWER\" >> /workspace/monitor.csv
-  sleep 1
-done" &>/dev/null &'
-```
-
-### 查看監控資料
-```bash
-# 最近 10 筆
-ssh -p 60002 root@153.198.29.53 "tail -10 /workspace/monitor.csv"
-
-# 下載到本地分析
-scp -P 60002 root@153.198.29.53:/workspace/monitor.csv ./
-```
-
-## 快速檢查指令
+## 常用指令
 
 ```bash
 # 檢查 GPU 狀態
-ssh -p 60002 root@153.198.29.53 "nvidia-smi --query-gpu=name,memory.total,memory.free,utilization.gpu,temperature.gpu --format=csv"
+ssh -p $VAST_PORT $VAST_HOST "nvidia-smi"
 
-# 檢查 CPU 和記憶體
-ssh -p 60002 root@153.198.29.53 "free -h && nproc"
+# 檢查 tmux
+ssh -p $VAST_PORT $VAST_HOST "tmux ls"
 
-# 檢查 tmux sessions
-ssh -p 60002 root@153.198.29.53 "tmux ls"
+# 進入 tmux session
+ssh -p $VAST_PORT $VAST_HOST -t "tmux attach -t vast"
 
-# 即時監控 (10 秒)
-ssh -p 60002 root@153.198.29.53 'for i in {1..10}; do
-  echo "$(date +%H:%M:%S) CPU: $(top -bn1 | grep "Cpu(s)" | awk "{print \$2}")% GPU: $(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader)"
-  sleep 1
-done'
+# 查看訓練 window 輸出
+ssh -p $VAST_PORT $VAST_HOST "tmux capture-pane -t vast:train -p | tail -50"
 ```
-
-## 注意事項
-
-1. **SSH Key 同步問題**：vast.ai 有時無法正確同步 SSH key 到 instance，需手動加入 `authorized_keys`
-
-2. **Instance 重啟**：重啟後 tmux session 會消失，需重新建立
-
-3. **監控腳本**：nohup 背景執行，instance 重啟後需重新啟動
-
-4. **費用**：$0.472/hr，記得用完要停止 instance
 
 ---
 
-*建立日期：2025-11-25*
+## 注意事項
+
+1. **SSH Key**：每次租用新 instance 都需要重新添加 SSH key
+2. **Instance 重啟**：tmux session 和 TensorBoard 會消失，需重新設定
+3. **費用**：記得用完要停止 instance
+4. **資料集**：需另外下載或上傳 COCO 資料集到 `/workspace/Yolov7fast/coco320/`
+
+---
+
+## 資料集上傳
+
+```bash
+# 從本機上傳 coco320 (約 5.9GB)
+rsync -avz --progress \
+    -e "ssh -p $VAST_PORT" \
+    /Users/jimmy/Projects/Yolov7fast/coco320/ \
+    $VAST_HOST:/workspace/Yolov7fast/coco320/
+```
+
+---
+
+*最後更新：2025-11-27*
