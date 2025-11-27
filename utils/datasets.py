@@ -85,13 +85,22 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if rank != -1 else None
     loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
+
+    # Stage 4: Select appropriate collate function
+    if quad:
+        _collate_fn = LoadImagesAndLabels.collate_fn4
+    elif worker_tensor:
+        _collate_fn = LoadImagesAndLabels.collate_fn_fast
+    else:
+        _collate_fn = LoadImagesAndLabels.collate_fn
+
     # Use torch.utils.data.DataLoader() if dataset.properties will update during training else InfiniteDataLoader()
     dataloader = loader(dataset,
                         batch_size=batch_size,
                         num_workers=nw,
                         sampler=sampler,
                         pin_memory=True,
-                        collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn,
+                        collate_fn=_collate_fn,
                         persistent_workers=persistent_workers and nw > 0)  # Stage 2: keep workers alive
     return dataloader, dataset
 
@@ -640,6 +649,22 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
     @staticmethod
     def collate_fn(batch):
+        img, label, path, shapes = zip(*batch)  # transposed
+        for i, l in enumerate(label):
+            l[:, 0] = i  # add target image index for build_targets()
+        return torch.stack(img, 0), torch.cat(label, 0), path, shapes
+
+    @staticmethod
+    def collate_fn_fast(batch):
+        """Fast collate for worker_tensor mode (Phase 1).
+
+        When worker_tensor=True, images are already tensors from __getitem__.
+        This function is identical to collate_fn but serves as a marker
+        that we're using the optimized path.
+
+        The real optimization is that persistent_workers + worker doing
+        tensor conversion reduces main process CPU load.
+        """
         img, label, path, shapes = zip(*batch)  # transposed
         for i, l in enumerate(label):
             l[:, 0] = i  # add target image index for build_targets()
