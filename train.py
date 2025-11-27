@@ -562,6 +562,13 @@ if __name__ == '__main__':
     parser.add_argument('--artifact_alias', type=str, default="latest", help='version of dataset artifact to be used')
     parser.add_argument('--freeze', nargs='+', type=int, default=[0], help='Freeze layers: backbone of yolov7=50, first3=0 1 2')
     parser.add_argument('--v5-metric', action='store_true', help='assume maximum recall as 1.0 in AP calculation')
+    # Phase 1: Fast DataLoader options
+    parser.add_argument('--fast-dataloader', action='store_true',
+                        help='Enable all dataloader optimizations (shortcut for --persistent-workers --worker-tensor)')
+    parser.add_argument('--persistent-workers', action='store_true',
+                        help='Keep worker processes alive between epochs')
+    parser.add_argument('--worker-tensor', action='store_true',
+                        help='Convert numpy to tensor in worker process (reduces main CPU load)')
     opt = parser.parse_args()
 
     # Set DDP variables
