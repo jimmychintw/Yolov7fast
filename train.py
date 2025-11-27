@@ -247,7 +247,8 @@ def train(hyp, opt, device, tb_writer=None):
                                             world_size=opt.world_size, workers=opt.workers,
                                             image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '),
                                             persistent_workers=opt.persistent_workers,
-                                            worker_tensor=opt.worker_tensor)
+                                            worker_tensor=opt.worker_tensor,
+                                            micro_batch_size=opt.micro_batch_size)
     mlc = np.concatenate(dataset.labels, 0)[:, 0].max()  # max label class
     nb = len(dataloader)  # number of batches
     assert mlc < nc, 'Label class %g exceeds nc=%g in %s. Possible class labels are 0-%g' % (mlc, nc, opt.data, nc - 1)
@@ -573,6 +574,9 @@ if __name__ == '__main__':
                         help='Keep worker processes alive between epochs')
     parser.add_argument('--worker-tensor', action='store_true',
                         help='Convert numpy to tensor in worker process (reduces main CPU load)')
+    # Phase 2: Micro-Collate options
+    parser.add_argument('--micro-batch-size', type=int, default=0,
+                        help='Micro-batch size for Phase 2 optimization (0=disabled, recommended: 4 or 8)')
     opt = parser.parse_args()
 
     # Phase 1: Resolve fast-dataloader shortcut (Stage 2)

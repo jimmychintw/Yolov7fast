@@ -64,10 +64,10 @@ def exif_size(img):
 
 def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
                       rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='',
-                      persistent_workers=False, worker_tensor=False):
+                      persistent_workers=False, worker_tensor=False, micro_batch_size=0):
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache
     with torch_distributed_zero_first(rank):
-        dataset = LoadImagesAndLabels(path, imgsz, batch_size,
+        base_dataset = LoadImagesAndLabels(path, imgsz, batch_size,
                                       augment=augment,  # augment images
                                       hyp=hyp,  # augmentation hyperparameters
                                       rect=rect,  # rectangular training
@@ -79,10 +79,50 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
                                       prefix=prefix)
 
     # Store worker_tensor flag for __getitem__ to use (Stage 2)
-    dataset.worker_tensor = worker_tensor
+    base_dataset.worker_tensor = worker_tensor
 
-    batch_size = min(batch_size, len(dataset))
+    batch_size = min(batch_size, len(base_dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
+
+    # =============================================================================
+    # Phase 2: Micro-Collate Mode
+    # =============================================================================
+    if micro_batch_size > 1 and not quad and not image_weights and rank == -1:
+        # Use Micro-Collate mode: workers do torch.stack, main process only does torch.cat
+        logger.info(f'{prefix}Phase 2 Micro-Collate enabled: micro_batch_size={micro_batch_size}')
+
+        # Wrap dataset with MicroBatchDataset
+        dataset = MicroBatchDataset(base_dataset)
+
+        # Create MicroBatchSampler
+        sampler = MicroBatchSampler(base_dataset, micro_batch_size=micro_batch_size, shuffle=True, drop_last=False)
+
+        # Calculate effective batch_size for DataLoader
+        # macro_batch_size = batch_size (total images per iteration)
+        # micro_batch_size = images per worker call
+        # dataloader_batch_size = macro_batch_size / micro_batch_size
+        dataloader_batch_size = max(1, batch_size // micro_batch_size)
+
+        logger.info(f'{prefix}  macro_batch={batch_size}, micro_batch={micro_batch_size}, '
+                    f'dataloader_batch={dataloader_batch_size}')
+
+        # Use standard DataLoader with our custom sampler
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=dataloader_batch_size,
+            sampler=sampler,
+            num_workers=nw,
+            pin_memory=True,
+            collate_fn=collate_fn_micro,
+            persistent_workers=persistent_workers and nw > 0,
+            drop_last=False
+        )
+        return dataloader, base_dataset
+
+    # =============================================================================
+    # Original Mode (Phase 1 or Standard)
+    # =============================================================================
+    dataset = base_dataset
     sampler = torch.utils.data.distributed.DistributedSampler(dataset) if rank != -1 else None
     loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
 
@@ -137,6 +177,166 @@ class _RepeatSampler(object):
     def __iter__(self):
         while True:
             yield from iter(self.sampler)
+
+
+# =============================================================================
+# Phase 2: Micro-Collate Classes
+# =============================================================================
+
+class MicroBatchSampler(torch.utils.data.Sampler):
+    """Sampler that yields lists of indices (micro-batches) instead of single indices.
+
+    This allows workers to process multiple images and stack them into micro-batch
+    tensors, reducing main process CPU load from torch.stack operations.
+
+    Args:
+        data_source: Dataset to sample from
+        micro_batch_size: Number of indices per micro-batch (default: 4)
+        shuffle: Whether to shuffle indices (default: True)
+        drop_last: Whether to drop the last incomplete micro-batch (default: False)
+    """
+
+    def __init__(self, data_source, micro_batch_size=4, shuffle=True, drop_last=False):
+        self.data_source = data_source
+        self.micro_batch_size = micro_batch_size
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self.n = len(data_source)
+
+    def __iter__(self):
+        if self.shuffle:
+            indices = torch.randperm(self.n).tolist()
+        else:
+            indices = list(range(self.n))
+
+        # Group indices into micro-batches
+        micro_batches = []
+        for i in range(0, len(indices), self.micro_batch_size):
+            micro_batch = indices[i:i + self.micro_batch_size]
+            if len(micro_batch) == self.micro_batch_size or not self.drop_last:
+                micro_batches.append(micro_batch)
+
+        return iter(micro_batches)
+
+    def __len__(self):
+        if self.drop_last:
+            return self.n // self.micro_batch_size
+        else:
+            return (self.n + self.micro_batch_size - 1) // self.micro_batch_size
+
+
+class MicroBatchDataset(Dataset):
+    """Wrapper dataset that processes micro-batches of indices.
+
+    Instead of returning a single sample, this dataset:
+    1. Receives a list of indices from MicroBatchSampler
+    2. Processes each image in the worker process
+    3. Stacks images into a micro-batch tensor (in worker, not main process!)
+    4. Returns (micro_batch_tensor, labels_list, paths_list, shapes_list)
+
+    This moves torch.stack from main process to worker processes,
+    eliminating the main CPU bottleneck.
+    """
+
+    def __init__(self, base_dataset):
+        """
+        Args:
+            base_dataset: LoadImagesAndLabels instance
+        """
+        self.base_dataset = base_dataset
+        # Copy attributes needed by training code
+        self.img_files = base_dataset.img_files
+        self.labels = base_dataset.labels
+        self.n = base_dataset.n
+        self.indices = base_dataset.indices
+
+    def __getitem__(self, index_group):
+        """Process a group of indices and return stacked micro-batch.
+
+        Args:
+            index_group: List of indices to process
+
+        Returns:
+            imgs: Stacked tensor (micro_bs, C, H, W) - already on CPU tensor
+            labels: List of label tensors (will be concatenated in collate)
+            paths: List of image paths
+            shapes: List of shapes
+        """
+        if not isinstance(index_group, (list, tuple)):
+            # Fallback for single index (shouldn't happen with MicroBatchSampler)
+            index_group = [index_group]
+
+        imgs = []
+        labels = []
+        paths = []
+        shapes = []
+
+        for idx in index_group:
+            # Call base dataset's __getitem__ for each index
+            img, label, path, shape = self.base_dataset[idx]
+            imgs.append(img)
+            labels.append(label)
+            paths.append(path)
+            shapes.append(shape)
+
+        # Stack images in worker process (KEY OPTIMIZATION!)
+        # This moves torch.stack from main process to worker
+        imgs_stacked = torch.stack(imgs, 0)  # (micro_bs, C, H, W)
+
+        return imgs_stacked, labels, paths, shapes
+
+    def __len__(self):
+        return self.base_dataset.n
+
+
+def collate_fn_micro(batch):
+    """Ultra-lightweight collate function for micro-batch mode.
+
+    Since workers already return stacked tensors (micro_bs, C, H, W),
+    main process only needs to concatenate them - much lighter than stacking
+    individual images.
+
+    Args:
+        batch: List of (imgs_stacked, labels_list, paths_list, shapes_list)
+               Each imgs_stacked is (micro_bs, C, H, W)
+
+    Returns:
+        imgs: Concatenated tensor (batch_size, C, H, W)
+        labels: Concatenated labels with batch indices
+        paths: Flattened list of paths
+        shapes: Flattened list of shapes
+    """
+    imgs_list = []
+    all_labels = []
+    paths_list = []
+    shapes_list = []
+
+    # Global image index for batch index assignment
+    img_idx = 0
+
+    for imgs, labels, paths, shapes in batch:
+        imgs_list.append(imgs)
+        paths_list.extend(paths)
+        shapes_list.extend(shapes)
+
+        # Assign batch indices to labels
+        for label in labels:
+            label[:, 0] = img_idx
+            all_labels.append(label)
+            img_idx += 1
+
+    # Concatenate micro-batches (very fast, just pointer manipulation)
+    imgs = torch.cat(imgs_list, dim=0)
+
+    # Concatenate all labels
+    labels = torch.cat(all_labels, 0)
+
+    return imgs, labels, tuple(paths_list), tuple(shapes_list)
+
+
+# =============================================================================
+# End Phase 2 Micro-Collate Classes
+# =============================================================================
 
 
 class LoadImages:  # for inference
