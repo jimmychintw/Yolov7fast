@@ -1,6 +1,28 @@
 # 專案進度報告
 
-## 目前狀態：vast.ai 環境設定完成，待上傳資料集
+## 目前狀態：效能瓶頸已找到 - ComputeLossOTA 是主因
+
+### 重大發現 (2025-11-27)
+
+**效能分析結果：ComputeLossOTA 是訓練緩慢的主要原因**
+
+| 指標 | ComputeLossOTA | ComputeLoss | 改善 |
+|------|----------------|-------------|------|
+| **loss計算** | 1016.03 ms | **11.22 ms** | **90.5x 更快** |
+| forward | 50.20 ms | 50.24 ms | 相同 |
+| backward | 103.39 ms | 103.60 ms | 相同 |
+| **Total/iter** | 1174.06 ms | **170.89 ms** | **6.9x 更快** |
+| **GPU利用率** | 13.1% | **90.0%** | 從超低變正常 |
+
+**結論：**
+- OTA Loss 的計算佔用了 86.5% 的訓練時間
+- 關閉 OTA (`loss_ota: 0`) 後，訓練速度提升 **6.9x**
+- 這是之前看到 6x 提速的真正原因（不是 mosaic）
+
+**建議優化方向：**
+1. 使用 `hyp.scratch.tiny.noota.yaml` 進行快速訓練
+2. 研究 OTA Loss 的 GPU 優化可能性
+3. 考慮在訓練後期才啟用 OTA 以獲得精度收益
 
 ### 已完成項目
 
@@ -59,9 +81,12 @@ TensorBoard: http://localhost:6006
 
 ### 下次繼續事項
 
-- [ ] 上傳 coco320 資料集到 vast.ai (5.9GB)
-- [ ] 在遠端開始第一次訓練測試
-- [ ] 測試 YOLOv7-Tiny + coco320 組合
+- [x] ~~上傳 coco320 資料集到 vast.ai (5.9GB)~~ (已完成)
+- [x] ~~在遠端開始第一次訓練測試~~ (已完成)
+- [x] ~~找出效能瓶頸~~ (已完成 - ComputeLossOTA)
+- [ ] 使用 `loss_ota: 0` 跑完整訓練測試 mAP
+- [ ] 研究 OTA Loss 優化可能性
+- [ ] 對比 OTA vs non-OTA 訓練的精度差異
 
 ### 訓練指令參考
 
@@ -80,7 +105,14 @@ python train.py --data data/coco640.yaml --img 640 --cfg cfg/training/yolov7.yam
 
 ## 變更歷史
 
-### 2025-11-27
+### 2025-11-27 (下午 - 效能分析)
+- 建立效能分析計劃 PERFORMANCE_ANALYSIS_PLAN_V2.md
+- 建立 CUDA Events 剖析工具 tests/profile_training_loop.py
+- 發現 ComputeLossOTA 佔用 86.5% 訓練時間
+- 建立 hyp.scratch.tiny.noota.yaml (關閉 OTA Loss)
+- 驗證：關閉 OTA 後訓練速度提升 6.9x，GPU 利用率從 13% 提升到 90%
+
+### 2025-11-27 (上午)
 - 租用新 vast.ai instance (RTX 5090)
 - 設定 SSH key 連線
 - 安裝 PyTorch 2.8.0 + CUDA 12.8 (支援 Blackwell 架構)
