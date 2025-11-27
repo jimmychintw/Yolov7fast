@@ -1,8 +1,40 @@
 # 專案進度報告
 
-## 目前狀態：效能瓶頸已找到 - ComputeLossOTA 是主因
+## 目前狀態：OTA vs non-OTA 對比訓練進行中
 
-### 重大發現 (2025-11-27)
+### 訓練結果對比 (2025-11-28)
+
+| 版本 | 訓練時間 | mAP@0.5 | mAP@0.5:0.95 | 狀態 |
+|------|---------|---------|--------------|------|
+| **non-OTA** | 1.8 小時 | **0.385** | **0.226** | ✅ 完成 |
+| **OTA** | ~10-12 小時 | 待測 | 待測 | 🔄 進行中 |
+
+### non-OTA 訓練結果 (已完成)
+
+- **訓練目錄**：`runs/train/noota_100ep2`
+- **最終 mAP@0.5**：0.385
+- **最終 mAP@0.5:0.95**：0.226
+- **Precision**：0.568
+- **Recall**：0.355
+- **訓練時間**：1.806 小時
+- **訓練速度**：~5.76 it/s
+
+### OTA 訓練 (進行中)
+
+- **訓練目錄**：`runs/train/ota_100ep4`
+- **hyp 檔案**：`data/hyp.scratch.tiny.yaml` (loss_ota: 1)
+- **訓練速度**：~5.0 it/s
+- **預估完成時間**：~10-12 小時
+- **開始時間**：2025-11-28 凌晨
+
+**查看進度指令：**
+```bash
+ssh -p 21024 root@116.122.206.233 "tmux capture-pane -t vast:train -p | tail -10"
+```
+
+---
+
+## 重大發現 (2025-11-27)
 
 **效能分析結果：ComputeLossOTA 是訓練緩慢的主要原因**
 
@@ -19,12 +51,9 @@
 - 關閉 OTA (`loss_ota: 0`) 後，訓練速度提升 **6.9x**
 - 這是之前看到 6x 提速的真正原因（不是 mosaic）
 
-**建議優化方向：**
-1. 使用 `hyp.scratch.tiny.noota.yaml` 進行快速訓練
-2. 研究 OTA Loss 的 GPU 優化可能性
-3. 考慮在訓練後期才啟用 OTA 以獲得精度收益
+---
 
-### 已完成項目
+## 已完成項目
 
 | 日期 | 項目 | 說明 |
 |------|------|------|
@@ -39,37 +68,13 @@
 | 2025-11-27 | vast.ai 環境 | 新 instance 設定完成 (RTX 5090 + PyTorch 2.8.0) |
 | 2025-11-27 | 程式碼修正 | 修正 test.py 硬編碼 annotations 路徑問題 |
 | 2025-11-27 | 設定文檔 | 重寫 VAST_SETUP.md 為一鍵設定指南 |
-| 2025-11-27 | 清理 | 刪除空的 coco/ 目錄 |
+| 2025-11-27 | 效能分析 | 找出 ComputeLossOTA 是瓶頸 |
+| 2025-11-28 | PyTorch 2.8 相容 | 修正所有 torch.load 加入 weights_only=False |
+| 2025-11-28 | non-OTA 訓練 | 完成 100 epochs，mAP@0.5 = 0.385 |
 
-### 目前專案結構
+---
 
-```
-Yolov7fast/
-├── cfg/training/          # 模型架構配置
-│   ├── yolov7-tiny.yaml
-│   ├── yolov7.yaml
-│   └── ...
-├── data/                  # 資料集配置
-│   ├── coco320.yaml      # 320x320 (有資料)
-│   ├── coco480.yaml      # 480x480 (空)
-│   └── coco640.yaml      # 640x640 (空)
-├── coco320/              # 320x320 資料集 (5.9GB)
-│   ├── images/train2017/ # 118,287 張
-│   ├── images/val2017/   # 5,000 張
-│   ├── labels/
-│   └── annotations/
-├── coco480/              # 待填入
-├── coco640/              # 待填入
-├── train.py
-├── detect.py
-├── test.py
-├── CLAUDE.md
-├── README.md
-├── VAST_SETUP.md         # vast.ai 一鍵設定指南
-└── progress.md
-```
-
-### vast.ai 遠端環境
+## vast.ai 遠端環境
 
 ```
 SSH: ssh -p 21024 root@116.122.206.233 -L 6006:localhost:6006
@@ -79,44 +84,45 @@ tmux session: vast (4 windows: train, cpu, gpu, terminal)
 TensorBoard: http://localhost:6006
 ```
 
-### 目前進行中 (2025-11-27 晚間)
+---
 
-**non-OTA 100 epochs 訓練正在執行中**
-- 訓練目錄：`runs/train/noota_100ep2`
-- hyp 檔案：`data/hyp.scratch.tiny.noota.yaml` (loss_ota: 0)
-- 預估完成時間：約 1.5 小時
-- 訓練速度：~5.8 it/s (170ms/iter)
+## 下次繼續事項
 
-**查看進度指令：**
-```bash
-ssh -p 21024 root@116.122.206.233 "tmux capture-pane -t vast:train -p | tail -10"
-```
-
-### 下次繼續事項
-
-- [x] ~~上傳 coco320 資料集到 vast.ai (5.9GB)~~ (已完成)
-- [x] ~~在遠端開始第一次訓練測試~~ (已完成)
-- [x] ~~找出效能瓶頸~~ (已完成 - ComputeLossOTA)
-- [ ] **[進行中]** 使用 `loss_ota: 0` 跑完整訓練 100 epochs
-- [ ] 跑 OTA 版本 100 epochs 對比
+- [x] 上傳 coco320 資料集到 vast.ai (5.9GB)
+- [x] 在遠端開始第一次訓練測試
+- [x] 找出效能瓶頸 (ComputeLossOTA)
+- [x] 使用 `loss_ota: 0` 跑完整訓練 100 epochs
+- [ ] **[進行中]** 跑 OTA 版本 100 epochs 對比
 - [ ] 對比 OTA vs non-OTA 訓練的精度差異 (mAP)
+- [ ] 決定後續優化方向
 
-### 訓練指令參考
+---
+
+## 訓練指令參考
 
 ```bash
 # 在 vast.ai 遠端執行
 cd /workspace/Yolov7fast
 
-# YOLOv7-Tiny with 320x320 (fastest)
-python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tiny.yaml --batch-size 64 --epochs 100
+# non-OTA (快速訓練，~1.8 小時)
+python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tiny.yaml \
+    --hyp data/hyp.scratch.tiny.noota.yaml --batch-size 64 --epochs 100 \
+    --weights '' --noautoanchor
 
-# YOLOv7 with 640x640 (standard)
-python train.py --data data/coco640.yaml --img 640 --cfg cfg/training/yolov7.yaml --batch-size 32 --epochs 100
+# OTA (標準訓練，~10-12 小時)
+python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tiny.yaml \
+    --hyp data/hyp.scratch.tiny.yaml --batch-size 64 --epochs 100 \
+    --weights '' --noautoanchor
 ```
 
 ---
 
 ## 變更歷史
+
+### 2025-11-28 (凌晨)
+- non-OTA 100 epochs 訓練完成，mAP@0.5 = 0.385
+- 修正 PyTorch 2.8 相容性問題 (torch.load weights_only)
+- 啟動 OTA 100 epochs 訓練
 
 ### 2025-11-27 (下午 - 效能分析)
 - 建立效能分析計劃 PERFORMANCE_ANALYSIS_PLAN_V2.md
