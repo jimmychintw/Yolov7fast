@@ -15,7 +15,7 @@ import numpy as np
 
 from models.yolo import Model
 from utils.datasets import create_dataloader
-from utils.loss import ComputeLossOTA
+from utils.loss import ComputeLoss, ComputeLossOTA
 
 
 class CUDAProfiler:
@@ -116,7 +116,12 @@ def profile_training(data_yaml, hyp_yaml, cfg, batch_size=384, workers=16,
     )
 
     # 建立 Loss 和 Optimizer
-    compute_loss = ComputeLossOTA(model)
+    use_ota = hyp.get('loss_ota', 1) == 1
+    print(f"Using {'ComputeLossOTA' if use_ota else 'ComputeLoss'}")
+    if use_ota:
+        compute_loss = ComputeLossOTA(model)
+    else:
+        compute_loss = ComputeLoss(model)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     scaler = amp.GradScaler()
 
