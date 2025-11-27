@@ -15,7 +15,6 @@ import numpy as np
 from models.yolo import Model
 from utils.datasets import create_dataloader
 from utils.loss import ComputeLossOTA
-from utils.general import check_dataset
 
 
 class CUDAProfiler:
@@ -79,7 +78,8 @@ def profile_training(data_yaml, hyp_yaml, cfg, batch_size=384, workers=16,
     with open(hyp_yaml) as f:
         hyp = yaml.safe_load(f)
 
-    data_dict = check_dataset(data_yaml)
+    with open(data_yaml) as f:
+        data_dict = yaml.safe_load(f)
     train_path = data_dict['train']
     nc = int(data_dict['nc'])
 
