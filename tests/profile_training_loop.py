@@ -5,6 +5,7 @@ Phase 3: 訓練迴圈細粒度效能剖析
 import sys
 import time
 from pathlib import Path
+from argparse import Namespace
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
@@ -99,10 +100,13 @@ def profile_training(data_yaml, hyp_yaml, cfg, batch_size=384, workers=16,
     model = Model(cfg, ch=3, nc=nc).to(device)
     model.train()
 
+    # 建立 opt 物件 (模擬 train.py 的 opt)
+    opt = Namespace(single_cls=False)
+
     # 建立 DataLoader
     print("Creating dataloader...")
     dataloader, dataset = create_dataloader(
-        train_path, 320, batch_size, 32, hyp=hyp,
+        train_path, 320, batch_size, 32, opt, hyp=hyp,
         augment=True, cache=cache_images, rect=False,
         workers=workers, image_weights=False, quad=False,
         prefix='profile: '
