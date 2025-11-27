@@ -98,7 +98,9 @@ def profile_training(data_yaml, hyp_yaml, cfg, batch_size=384, workers=16,
     # 建立模型
     print("Loading model...")
     model = Model(cfg, ch=3, nc=nc).to(device)
+    model.nc = nc
     model.hyp = hyp  # ComputeLossOTA 需要此屬性
+    model.gr = 1.0   # iou loss ratio
     model.train()
 
     # 建立 opt 物件 (模擬 train.py 的 opt)
