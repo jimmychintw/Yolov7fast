@@ -79,14 +79,27 @@ tmux session: vast (4 windows: train, cpu, gpu, terminal)
 TensorBoard: http://localhost:6006
 ```
 
+### 目前進行中 (2025-11-27 晚間)
+
+**non-OTA 100 epochs 訓練正在執行中**
+- 訓練目錄：`runs/train/noota_100ep2`
+- hyp 檔案：`data/hyp.scratch.tiny.noota.yaml` (loss_ota: 0)
+- 預估完成時間：約 1.5 小時
+- 訓練速度：~5.8 it/s (170ms/iter)
+
+**查看進度指令：**
+```bash
+ssh -p 21024 root@116.122.206.233 "tmux capture-pane -t vast:train -p | tail -10"
+```
+
 ### 下次繼續事項
 
 - [x] ~~上傳 coco320 資料集到 vast.ai (5.9GB)~~ (已完成)
 - [x] ~~在遠端開始第一次訓練測試~~ (已完成)
 - [x] ~~找出效能瓶頸~~ (已完成 - ComputeLossOTA)
-- [ ] 使用 `loss_ota: 0` 跑完整訓練測試 mAP
-- [ ] 研究 OTA Loss 優化可能性
-- [ ] 對比 OTA vs non-OTA 訓練的精度差異
+- [ ] **[進行中]** 使用 `loss_ota: 0` 跑完整訓練 100 epochs
+- [ ] 跑 OTA 版本 100 epochs 對比
+- [ ] 對比 OTA vs non-OTA 訓練的精度差異 (mAP)
 
 ### 訓練指令參考
 
