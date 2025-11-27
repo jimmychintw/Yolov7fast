@@ -134,7 +134,10 @@ def profile_training(data_yaml, hyp_yaml, cfg, batch_size=384, workers=16,
         targets = targets.to(device)
         with amp.autocast():
             pred = model(imgs)
-            loss, _ = compute_loss(pred, targets, imgs)
+            if use_ota:
+                loss, _ = compute_loss(pred, targets, imgs)
+            else:
+                loss, _ = compute_loss(pred, targets)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -169,7 +172,10 @@ def profile_training(data_yaml, hyp_yaml, cfg, batch_size=384, workers=16,
         # 4. Loss
         profiler.start('loss')
         with amp.autocast():
-            loss, loss_items = compute_loss(pred, targets, imgs)
+            if use_ota:
+                loss, loss_items = compute_loss(pred, targets, imgs)
+            else:
+                loss, loss_items = compute_loss(pred, targets)
         profiler.end('loss')
 
         # 5. Backward
