@@ -1,6 +1,6 @@
 # 專案進度報告
 
-## 目前狀態：vast.ai 環境設定完成，待上傳資料集
+## 目前狀態：YOLOv7-Tiny 320x320 基準訓練完成，準備演算法優化
 
 ### 已完成項目
 
@@ -14,18 +14,51 @@
 | 2025-11-26 | COCO 資料集 | 確認本地有 320x320 版本 (5.9GB, 118287 張) |
 | 2025-11-26 | 多解析度支援 | 建立 coco320/480/640 目錄結構與設定檔 |
 | 2025-11-26 | 文檔更新 | 重寫 README.md 為簡潔版本 |
-| 2025-11-27 | vast.ai 環境 | 新 instance 設定完成 (RTX 5090 + PyTorch 2.8.0) |
-| 2025-11-27 | 程式碼修正 | 修正 test.py 硬編碼 annotations 路徑問題 |
-| 2025-11-27 | 設定文檔 | 重寫 VAST_SETUP.md 為一鍵設定指南 |
-| 2025-11-27 | 清理 | 刪除空的 coco/ 目錄 |
+| 2025-11-27 | vast.ai 環境 | RTX 5090 + PyTorch 2.8.0 設定完成 |
+| 2025-11-27 | 資料集上傳 | coco320 上傳至 vast.ai 完成 |
+| 2025-11-27 | **基準訓練** | YOLOv7-Tiny 320x320 訓練 21 epochs 完成 |
+| 2025-11-27 | 結果備份 | 訓練結果備份至 320_Tiny_Original |
+| 2025-11-27 | VS Code 設定 | 設定 Remote SSH 連線 vast.ai |
+| 2025-11-27 | 備份優化 | 建立 .syncignore 排除大型目錄 |
 
-### 目前專案結構
+---
+
+## 基準訓練結果 (Baseline)
+
+### YOLOv7-Tiny 320x320 (21 epochs)
+
+| 指標 | 數值 |
+|------|------|
+| mAP@.5 | **0.297** |
+| mAP@.5:.95 | **0.164** |
+| Precision | 0.427 |
+| Recall | 0.338 |
+| 訓練時間 | ~2.5 小時 |
+| GPU | RTX 5090 (32GB) |
+| Batch Size | 64 |
+
+### 訓練結果存放位置
+
+```
+vast.ai: /workspace/Yolov7fast/runs/train/
+├── 320_Tiny_Original/    ← 基準備份 (21 epochs)
+│   └── weights/
+│       ├── best.pt       (48 MB)
+│       └── last.pt       (48 MB)
+└── tiny320_scratch/      ← 原始訓練目錄
+```
+
+---
+
+## 目前專案結構
 
 ```
 Yolov7fast/
 ├── cfg/training/          # 模型架構配置
-│   ├── yolov7-tiny.yaml
-│   ├── yolov7.yaml
+│   ├── yolov7-tiny-640.yaml
+│   ├── yolov7-640.yaml
+│   ├── yolov7x-640.yaml
+│   ├── yolov7x-480.yaml
 │   └── ...
 ├── data/                  # 資料集配置
 │   ├── coco320.yaml      # 320x320 (有資料)
@@ -36,8 +69,6 @@ Yolov7fast/
 │   ├── images/val2017/   # 5,000 張
 │   ├── labels/
 │   └── annotations/
-├── coco480/              # 待填入
-├── coco640/              # 待填入
 ├── train.py
 ├── detect.py
 ├── test.py
@@ -47,50 +78,58 @@ Yolov7fast/
 └── progress.md
 ```
 
-### vast.ai 遠端環境
+---
+
+## vast.ai 遠端環境
 
 ```
-SSH: ssh -p 21024 root@116.122.206.233 -L 6006:localhost:6006
-GPU: RTX 5090 (32GB VRAM)
-PyTorch: 2.8.0+cu128 (支援 Blackwell sm_120)
+SSH: ssh -p 21024 root@116.122.206.233
+VS Code: Host "Vast_RTX5090" (已設定在 ~/.ssh/config)
+GPU: RTX 5090 (32GB VRAM, Blackwell sm_120)
+PyTorch: 2.8.0+cu128
 tmux session: vast (4 windows: train, cpu, gpu, terminal)
 TensorBoard: http://localhost:6006
 ```
 
-### 下次繼續事項
-
-- [ ] 上傳 coco320 資料集到 vast.ai (5.9GB)
-- [ ] 在遠端開始第一次訓練測試
-- [ ] 測試 YOLOv7-Tiny + coco320 組合
-
-### 訓練指令參考
-
-```bash
-# 在 vast.ai 遠端執行
-cd /workspace/Yolov7fast
-
-# YOLOv7-Tiny with 320x320 (fastest)
-python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tiny.yaml --batch-size 64 --epochs 100
-
-# YOLOv7 with 640x640 (standard)
-python train.py --data data/coco640.yaml --img 640 --cfg cfg/training/yolov7.yaml --batch-size 32 --epochs 100
+### SSH Config (~/.ssh/config)
 ```
+Host Vast_RTX5090
+  HostName 116.122.206.233
+  User root
+  Port 21024
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+---
+
+## 下次繼續事項
+
+- [ ] 開始演算法優化（加速）
+- [ ] 比較不同模型架構的效能
+- [ ] 測試 YOLOv7 640x640 標準訓練
+- [ ] 評估推論速度與準確度的權衡
 
 ---
 
 ## 變更歷史
 
-### 2025-11-27
+### 2025-11-27 (下午)
+- 完成 YOLOv7-Tiny 320x320 基準訓練 (21 epochs)
+- 訓練結果：mAP@.5 = 0.297, mAP@.5:.95 = 0.164
+- 備份訓練結果至 `320_Tiny_Original` 目錄
+- 設定 VS Code Remote SSH (`~/.ssh/config` 新增 Vast_RTX5090)
+- 建立 `.syncignore` 排除 coco、venv 等大型目錄
+- 更新 VAST_SETUP.md 為更完整的設定指南
+
+### 2025-11-27 (上午)
 - 租用新 vast.ai instance (RTX 5090)
 - 設定 SSH key 連線
 - 安裝 PyTorch 2.8.0 + CUDA 12.8 (支援 Blackwell 架構)
 - 安裝所有依賴套件
 - Clone 專案到 /workspace/Yolov7fast
 - 建立 tmux 環境 (train, cpu, gpu, terminal)
-- 啟動 TensorBoard (port 6006)
-- 刪除空的 coco/ 目錄
-- 修正 test.py 硬編碼 annotations 路徑（改為從 data yaml 自動推導）
-- 重寫 VAST_SETUP.md 為一鍵設定指南
+- 上傳 coco320 資料集 (~6GB)
+- 開始 YOLOv7-Tiny 訓練
 
 ### 2025-11-26
 - 修正 COCO 資料集路徑設定（移除硬編碼）

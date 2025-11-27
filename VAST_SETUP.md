@@ -1,41 +1,44 @@
 # Vast.ai 遠端訓練環境設定指南
 
-## 快速設定（一鍵腳本）
+## 🔄 每次重啟 Instance 的設定流程
 
-租用新 instance 後，依序執行以下步驟：
+### 快速檢查清單
 
-### Step 1: 添加 SSH Key
+| 步驟 | 動作 | 需要時間 |
+|------|------|----------|
+| 1 | 設定環境變數 | 10 秒 |
+| 2 | 一鍵安裝腳本 | 3-5 分鐘 |
+| 3 | 資料集還原 | 視情況 |
+| 4 | 連線開始工作 | - |
 
-1. 取得本機 public key：
-   ```bash
-   cat ~/.ssh/id_ed25519.pub
-   ```
+---
 
-2. 在 vast.ai 控制台：
-   - Instance → Connect → Manage SSH Keys
-   - 貼上 public key → ADD SSH KEY
-
-### Step 2: 設定環境變數
+## Step 1: 設定環境變數（本機執行）
 
 ```bash
-# 根據 vast.ai 提供的連線資訊修改
+# 根據新 instance 的連線資訊修改
+export VAST_HOST="root@<IP>"
+export VAST_PORT="<Port>"
+
+# 範例：
 export VAST_HOST="root@116.122.206.233"
 export VAST_PORT="21024"
 ```
 
-### Step 3: 一鍵安裝腳本
+---
+
+## Step 2: 一鍵安裝腳本（本機執行）
 
 ```bash
-# 複製以下內容到終端機執行
 ssh -p $VAST_PORT $VAST_HOST -o StrictHostKeyChecking=no 'bash -s' << 'EOF'
 set -e
 echo "=== 開始設定 vast.ai 環境 ==="
 
 # 1. 升級 pip
-echo "[1/5] 升級 pip, setuptools, wheel..."
+echo "[1/5] 升級 pip..."
 pip install -U pip setuptools wheel --break-system-packages -q
 
-# 2. 安裝 PyTorch 2.8.0 + CUDA 12.8 (支援 RTX 5090 Blackwell 架構)
+# 2. 安裝 PyTorch 2.8.0 + CUDA 12.8
 echo "[2/5] 安裝 PyTorch 2.8.0 (CUDA 12.8)..."
 pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
     --index-url https://download.pytorch.org/whl/cu128 \
@@ -48,10 +51,12 @@ pip install --break-system-packages -q \
     tensorboard torch-tb-profiler pandas seaborn ipython psutil thop pycocotools
 
 # 4. Clone 專案
-echo "[4/5] Clone YOLOv7fast 專案..."
+echo "[4/5] Clone/更新 YOLOv7fast 專案..."
 cd /workspace
 if [ ! -d "Yolov7fast" ]; then
     git clone https://github.com/jimmychintw/Yolov7fast.git
+else
+    cd Yolov7fast && git pull
 fi
 
 # 5. 建立 tmux 環境
@@ -66,35 +71,66 @@ tmux send-keys -t vast:gpu 'watch -n 1 nvidia-smi' Enter
 
 # 驗證
 echo ""
-echo "=== 設定完成！驗證環境 ==="
+echo "=== 設定完成！==="
 python3 -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
-echo ""
-echo "專案位置: /workspace/Yolov7fast"
 tmux ls
 EOF
 ```
 
-### Step 4: 啟動 TensorBoard
+---
 
+## Step 3: 還原資料集
+
+### 選項 A - 從 Google Drive 還原（推薦）
+- vast.ai 控制台 → 點 ☁️ Cloud Copy 按鈕
+
+### 選項 B - 從本機上傳
 ```bash
-ssh -p $VAST_PORT $VAST_HOST "mkdir -p /workspace/Yolov7fast/runs && nohup tensorboard --logdir /workspace/Yolov7fast/runs --port 6006 --bind_all &>/dev/null &"
+# 上傳 coco320 (約 3GB)
+rsync -avz --progress -e "ssh -p $VAST_PORT" \
+    ~/Projects/Yolov7fast/coco320/ \
+    $VAST_HOST:/workspace/Yolov7fast/coco320/
 ```
 
-### Step 5: 連線並開始訓練
+---
+
+## Step 4: 連線並開始工作
 
 ```bash
-# 連線 (含 TensorBoard port forwarding)
-ssh -p $VAST_PORT $VAST_HOST -L 6006:localhost:6006
+# SSH 連線
+ssh -p $VAST_PORT $VAST_HOST
 
 # 進入 tmux
 tmux attach -t vast
 
-# 開始訓練
+# 進入專案目錄
 cd /workspace/Yolov7fast
-python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tiny.yaml --batch-size 64 --epochs 100
 ```
 
-TensorBoard: http://localhost:6006
+---
+
+## 📋 精簡版（複製貼上用）
+
+```bash
+# === 每次新 instance 執行 ===
+
+# 1. 設定變數（改成你的）
+export VAST_HOST="root@116.122.206.233"
+export VAST_PORT="21024"
+
+# 2. 一鍵設定（約 3-5 分鐘）
+ssh -p $VAST_PORT $VAST_HOST -o StrictHostKeyChecking=no 'bash -s' << 'SETUP'
+pip install -U pip setuptools wheel --break-system-packages -q
+pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128 --break-system-packages -q
+pip install --break-system-packages -q matplotlib opencv-python Pillow PyYAML requests scipy tqdm tensorboard pandas seaborn psutil thop pycocotools
+cd /workspace && git clone https://github.com/jimmychintw/Yolov7fast.git 2>/dev/null || (cd Yolov7fast && git pull)
+tmux kill-server 2>/dev/null; tmux new -d -s vast -n train; tmux new-window -t vast -n terminal
+python3 -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
+SETUP
+
+# 3. 連線
+ssh -p $VAST_PORT $VAST_HOST -t "tmux attach -t vast"
+```
 
 ---
 
@@ -105,21 +141,9 @@ TensorBoard: http://localhost:6006
 | Python | 3.12 | vast.ai 預裝 |
 | PyTorch | 2.8.0+cu128 | 支援 Blackwell (sm_120) |
 | torchvision | 0.23.0+cu128 | |
-| torchaudio | 2.8.0+cu128 | |
 | CUDA | 12.8 | PyTorch wheel 內建 |
 
 **重要**：RTX 5090 使用 Blackwell 架構 (sm_120)，需要 PyTorch 2.8.0+ 和 CUDA 12.8+
-
----
-
-## 主機規格參考
-
-| 項目 | 規格 |
-|------|------|
-| GPU | NVIDIA GeForce RTX 5090 (32GB VRAM) |
-| CPU | AMD Ryzen 9 7950X (32 核心) |
-| RAM | 124GB+ |
-| Disk | 100GB+ |
 
 ---
 
@@ -156,8 +180,23 @@ ssh -p $VAST_PORT $VAST_HOST "tmux ls"
 # 進入 tmux session
 ssh -p $VAST_PORT $VAST_HOST -t "tmux attach -t vast"
 
-# 查看訓練 window 輸出
-ssh -p $VAST_PORT $VAST_HOST "tmux capture-pane -t vast:train -p | tail -50"
+# 查看訓練輸出
+ssh -p $VAST_PORT $VAST_HOST "tmux capture-pane -t vast:train -p | tail -20"
+```
+
+---
+
+## 備份與還原
+
+### 備份訓練結果到 Google Drive
+- vast.ai 控制台 → 點 → (Sync) 按鈕
+
+### 從 Google Drive 還原
+- vast.ai 控制台 → 點 ☁️ (Copy) 按鈕
+
+### 手動下載訓練結果
+```bash
+scp -P $VAST_PORT $VAST_HOST:/workspace/Yolov7fast/runs/train/*/weights/best.pt ./
 ```
 
 ---
@@ -165,21 +204,9 @@ ssh -p $VAST_PORT $VAST_HOST "tmux capture-pane -t vast:train -p | tail -50"
 ## 注意事項
 
 1. **SSH Key**：每次租用新 instance 都需要重新添加 SSH key
-2. **Instance 重啟**：tmux session 和 TensorBoard 會消失，需重新設定
+2. **Instance 重啟**：tmux session 會消失，需重新設定
 3. **費用**：記得用完要停止 instance
-4. **資料集**：需另外下載或上傳 COCO 資料集到 `/workspace/Yolov7fast/coco320/`
-
----
-
-## 資料集上傳
-
-```bash
-# 從本機上傳 coco320 (約 5.9GB)
-rsync -avz --progress \
-    -e "ssh -p $VAST_PORT" \
-    /Users/jimmy/Projects/Yolov7fast/coco320/ \
-    $VAST_HOST:/workspace/Yolov7fast/coco320/
-```
+4. **資料集**：建議用 Google Drive 備份，避免重複上傳
 
 ---
 
