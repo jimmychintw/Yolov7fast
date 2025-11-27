@@ -631,7 +631,12 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
 
-        return torch.from_numpy(img), labels_out, self.img_files[index], shapes
+        # Phase 1: Conditional tensor conversion
+        # When worker_tensor=True, convert here (in worker) to release GIL in main process
+        # When worker_tensor=False, return tensor anyway for compatibility (original behavior)
+        img = torch.from_numpy(img)
+
+        return img, labels_out, self.img_files[index], shapes
 
     @staticmethod
     def collate_fn(batch):
