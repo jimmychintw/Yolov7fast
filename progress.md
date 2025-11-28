@@ -1,42 +1,54 @@
 # 專案進度報告
 
-## 目前狀態：OTA vs non-OTA 對比訓練進行中
+## 目前狀態：OTA vs non-OTA 對比實驗完成 ✅
 
 ### 訓練結果對比 (2025-11-28)
 
-| 版本 | 訓練時間 | mAP@0.5 | mAP@0.5:0.95 | 狀態 |
-|------|---------|---------|--------------|------|
-| **non-OTA** | 1.8 小時 | **0.385** | **0.226** | ✅ 完成 |
-| **OTA** | ~10-12 小時 | 待測 | 待測 | 🔄 進行中 |
+| 版本 | 訓練時間 | mAP@0.5 | mAP@0.5:0.95 | Precision | Recall | 狀態 |
+|------|---------|---------|--------------|-----------|--------|------|
+| **non-OTA** | 1.81 小時 | 0.385 | 0.226 | **0.568** | 0.355 | ✅ 完成 |
+| **OTA** | 10.65 小時 | **0.414** | **0.251** | 0.558 | **0.400** | ✅ 完成 |
+| **差異** | 5.9x 更慢 | +7.5% | +11.1% | -1.8% | +12.7% | |
 
-### non-OTA 訓練結果 (已完成)
+### 關鍵結論
+
+1. **OTA Loss 精度較高**: mAP@0.5 提升 7.5%，mAP@0.5:0.95 提升 11.1%
+2. **non-OTA 效率較高**: 訓練速度快 5.9 倍，GPU 利用率 90% vs 13%
+3. **瓶頸分析**: OTA 的 SimOTA 匹配演算法佔用 86.5% 的迭代時間
+
+詳細分析請見 [OTA_ANALYSIS_REPORT.md](OTA_ANALYSIS_REPORT.md)
+
+---
+
+## 訓練詳細結果
+
+### non-OTA 訓練結果 (noota_100ep2)
 
 - **訓練目錄**：`runs/train/noota_100ep2`
 - **最終 mAP@0.5**：0.385
 - **最終 mAP@0.5:0.95**：0.226
 - **Precision**：0.568
 - **Recall**：0.355
-- **訓練時間**：1.806 小時
+- **訓練時間**：1.81 小時
 - **訓練速度**：~5.76 it/s
+- **GPU 利用率**：~90%
 
-### OTA 訓練 (進行中)
+### OTA 訓練結果 (ota_100ep4)
 
 - **訓練目錄**：`runs/train/ota_100ep4`
-- **hyp 檔案**：`data/hyp.scratch.tiny.yaml` (loss_ota: 1)
-- **訓練速度**：~5.0 it/s
-- **預估完成時間**：~10-12 小時
-- **開始時間**：2025-11-28 凌晨
-
-**查看進度指令：**
-```bash
-ssh -p 21024 root@116.122.206.233 "tmux capture-pane -t vast:train -p | tail -10"
-```
+- **最終 mAP@0.5**：0.414
+- **最終 mAP@0.5:0.95**：0.251
+- **Precision**：0.558
+- **Recall**：0.400
+- **訓練時間**：10.65 小時
+- **訓練速度**：~0.97 it/s
+- **GPU 利用率**：~13%
 
 ---
 
-## 重大發現 (2025-11-27)
+## 效能分析結果 (2025-11-27)
 
-**效能分析結果：ComputeLossOTA 是訓練緩慢的主要原因**
+**ComputeLossOTA 是訓練緩慢的主要原因**
 
 | 指標 | ComputeLossOTA | ComputeLoss | 改善 |
 |------|----------------|-------------|------|
@@ -45,11 +57,6 @@ ssh -p 21024 root@116.122.206.233 "tmux capture-pane -t vast:train -p | tail -10
 | backward | 103.39 ms | 103.60 ms | 相同 |
 | **Total/iter** | 1174.06 ms | **170.89 ms** | **6.9x 更快** |
 | **GPU利用率** | 13.1% | **90.0%** | 從超低變正常 |
-
-**結論：**
-- OTA Loss 的計算佔用了 86.5% 的訓練時間
-- 關閉 OTA (`loss_ota: 0`) 後，訓練速度提升 **6.9x**
-- 這是之前看到 6x 提速的真正原因（不是 mosaic）
 
 ---
 
@@ -71,6 +78,8 @@ ssh -p 21024 root@116.122.206.233 "tmux capture-pane -t vast:train -p | tail -10
 | 2025-11-27 | 效能分析 | 找出 ComputeLossOTA 是瓶頸 |
 | 2025-11-28 | PyTorch 2.8 相容 | 修正所有 torch.load 加入 weights_only=False |
 | 2025-11-28 | non-OTA 訓練 | 完成 100 epochs，mAP@0.5 = 0.385 |
+| 2025-11-28 | OTA 訓練 | 完成 100 epochs，mAP@0.5 = 0.414 |
+| 2025-11-28 | 分析報告 | 撰寫完整 OTA vs non-OTA 分析報告 |
 
 ---
 
@@ -92,9 +101,12 @@ TensorBoard: http://localhost:6006
 - [x] 在遠端開始第一次訓練測試
 - [x] 找出效能瓶頸 (ComputeLossOTA)
 - [x] 使用 `loss_ota: 0` 跑完整訓練 100 epochs
-- [ ] **[進行中]** 跑 OTA 版本 100 epochs 對比
-- [ ] 對比 OTA vs non-OTA 訓練的精度差異 (mAP)
+- [x] 跑 OTA 版本 100 epochs 對比
+- [x] 對比 OTA vs non-OTA 訓練的精度差異 (mAP)
 - [ ] 決定後續優化方向
+- [ ] 測試 non-OTA 300 epochs 是否能達到 OTA 100 epochs 的精度
+- [ ] 調查 OTA 的 GPU 實現可能性
+- [ ] 測試 640x640 解析度下的差異
 
 ---
 
@@ -118,6 +130,11 @@ python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tin
 ---
 
 ## 變更歷史
+
+### 2025-11-28 (下午 - 分析報告)
+- OTA 100 epochs 訓練完成，mAP@0.5 = 0.414
+- 撰寫完整 OTA vs non-OTA 分析報告 (OTA_ANALYSIS_REPORT.md)
+- 更新 progress.md 加入完整對比結果
 
 ### 2025-11-28 (凌晨)
 - non-OTA 100 epochs 訓練完成，mAP@0.5 = 0.385
