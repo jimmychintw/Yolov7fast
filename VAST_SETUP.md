@@ -34,33 +34,38 @@ ssh -p $VAST_PORT $VAST_HOST -o StrictHostKeyChecking=no 'bash -s' << 'EOF'
 set -e
 echo "=== 開始設定 vast.ai 環境 ==="
 
-# 1. 升級 pip
-echo "[1/5] 升級 pip..."
-pip install -U pip setuptools wheel --break-system-packages -q
-
-# 2. 安裝 PyTorch 2.8.0 + CUDA 12.8
-echo "[2/5] 安裝 PyTorch 2.8.0 (CUDA 12.8)..."
-pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
-    --index-url https://download.pytorch.org/whl/cu128 \
-    --break-system-packages -q
-
-# 3. 安裝其他依賴
-echo "[3/5] 安裝其他依賴套件..."
-pip install --break-system-packages -q \
-    matplotlib opencv-python Pillow PyYAML requests scipy tqdm \
-    tensorboard torch-tb-profiler pandas seaborn ipython psutil thop pycocotools
-
-# 4. Clone 專案
-echo "[4/5] Clone/更新 YOLOv7fast 專案..."
+# 1. Clone 專案
+echo "[1/6] Clone/更新 YOLOv7fast 專案..."
 cd /workspace
 if [ ! -d "Yolov7fast" ]; then
     git clone https://github.com/jimmychintw/Yolov7fast.git
 else
     cd Yolov7fast && git pull
 fi
+cd /workspace/Yolov7fast
 
-# 5. 建立 tmux 環境
-echo "[5/5] 建立 tmux 環境..."
+# 2. 建立虛擬環境
+echo "[2/6] 建立虛擬環境..."
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. 升級 pip
+echo "[3/6] 升級 pip..."
+pip install -U pip setuptools wheel -q
+
+# 4. 安裝 PyTorch 2.8.0 + CUDA 12.8
+echo "[4/6] 安裝 PyTorch 2.8.0 (CUDA 12.8)..."
+pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
+    --index-url https://download.pytorch.org/whl/cu128 -q
+
+# 5. 安裝其他依賴
+echo "[5/6] 安裝其他依賴套件..."
+pip install -q \
+    matplotlib opencv-python Pillow PyYAML requests scipy tqdm \
+    tensorboard torch-tb-profiler pandas seaborn ipython psutil thop pycocotools
+
+# 6. 建立 tmux 環境
+echo "[6/6] 建立 tmux 環境..."
 tmux kill-server 2>/dev/null || true
 tmux new -d -s vast -n train
 tmux new-window -t vast -n cpu
@@ -72,7 +77,9 @@ tmux send-keys -t vast:gpu 'watch -n 1 nvidia-smi' Enter
 # 驗證
 echo ""
 echo "=== 設定完成！==="
-python3 -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+source venv/bin/activate
+python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+echo "venv: $(which python)"
 tmux ls
 EOF
 ```
@@ -81,15 +88,13 @@ EOF
 
 ## Step 3: 還原資料集
 
-### 選項 A - 從 Google Drive 還原（推薦）
-- vast.ai 控制台 → 點 ☁️ Cloud Copy 按鈕
 
-### 選項 B - 從本機上傳
+
+### 從本機上傳 (如果 server 上尚未有對應的 dataset)
 ```bash
-# 上傳 coco320 (約 3GB)
-rsync -avz --progress -e "ssh -p $VAST_PORT" \
-    ~/Projects/Yolov7fast/coco320/ \
-    $VAST_HOST:/workspace/Yolov7fast/coco320/
+# 上傳 coco.zip
+使用 rsync 
+最後解壓縮，放在與本機相同的對應目錄中
 ```
 
 ---
@@ -103,8 +108,9 @@ ssh -p $VAST_PORT $VAST_HOST
 # 進入 tmux
 tmux attach -t vast
 
-# 進入專案目錄
+# 進入專案目錄並啟用虛擬環境
 cd /workspace/Yolov7fast
+source venv/bin/activate
 ```
 
 ---
@@ -120,12 +126,14 @@ export VAST_PORT="21024"
 
 # 2. 一鍵設定（約 3-5 分鐘）
 ssh -p $VAST_PORT $VAST_HOST -o StrictHostKeyChecking=no 'bash -s' << 'SETUP'
-pip install -U pip setuptools wheel --break-system-packages -q
-pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128 --break-system-packages -q
-pip install --break-system-packages -q matplotlib opencv-python Pillow PyYAML requests scipy tqdm tensorboard pandas seaborn psutil thop pycocotools
 cd /workspace && git clone https://github.com/jimmychintw/Yolov7fast.git 2>/dev/null || (cd Yolov7fast && git pull)
+cd /workspace/Yolov7fast
+python3 -m venv venv && source venv/bin/activate
+pip install -U pip setuptools wheel -q
+pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128 -q
+pip install -q matplotlib opencv-python Pillow PyYAML requests scipy tqdm tensorboard pandas seaborn psutil thop pycocotools
 tmux kill-server 2>/dev/null; tmux new -d -s vast -n train; tmux new-window -t vast -n terminal
-python3 -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
+python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
 SETUP
 
 # 3. 連線
@@ -210,4 +218,4 @@ scp -P $VAST_PORT $VAST_HOST:/workspace/Yolov7fast/runs/train/*/weights/best.pt 
 
 ---
 
-*最後更新：2025-11-27*
+*最後更新：2025-11-29*

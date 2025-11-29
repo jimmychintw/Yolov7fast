@@ -80,33 +80,21 @@
 | 2025-11-28 | non-OTA 訓練 | 完成 100 epochs，mAP@0.5 = 0.385 |
 | 2025-11-28 | OTA 訓練 | 完成 100 epochs，mAP@0.5 = 0.414 |
 | 2025-11-28 | 分析報告 | 撰寫完整 OTA vs non-OTA 分析報告 |
+| 2025-11-29 | 新主機設定 | 租用新 vast.ai instance，完成環境設定 |
+| 2025-11-29 | 虛擬環境 | 建立 venv，更新 VAST_SETUP.md 加入虛擬環境步驟 |
+| 2025-11-29 | 資料同步 | 上傳 coco.zip (4.8GB)，同步 runs/ 訓練結果 (1.3GB) |
 
 ---
 
 ## vast.ai 遠端環境
 
 ```
-SSH: ssh -p 21024 root@116.122.206.233 -L 6006:localhost:6006
+SSH: ssh -p 42715 root@174.93.145.110
 GPU: RTX 5090 (32GB VRAM)
 PyTorch: 2.8.0+cu128 (支援 Blackwell sm_120)
+venv: /workspace/Yolov7fast/venv
 tmux session: vast (4 windows: train, cpu, gpu, terminal)
-TensorBoard: http://localhost:6006
 ```
-
----
-
-## 下次繼續事項
-
-- [x] 上傳 coco320 資料集到 vast.ai (5.9GB)
-- [x] 在遠端開始第一次訓練測試
-- [x] 找出效能瓶頸 (ComputeLossOTA)
-- [x] 使用 `loss_ota: 0` 跑完整訓練 100 epochs
-- [x] 跑 OTA 版本 100 epochs 對比
-- [x] 對比 OTA vs non-OTA 訓練的精度差異 (mAP)
-- [ ] 決定後續優化方向
-- [ ] 測試 non-OTA 300 epochs 是否能達到 OTA 100 epochs 的精度
-- [ ] 調查 OTA 的 GPU 實現可能性
-- [ ] 測試 640x640 解析度下的差異
 
 ---
 
@@ -130,6 +118,15 @@ python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tin
 ---
 
 ## 變更歷史
+
+### 2025-11-29
+- 租用新 vast.ai instance (RTX 5090)
+- 執行一鍵設定腳本，安裝 PyTorch 2.8.0+cu128
+- 建立虛擬環境 /workspace/Yolov7fast/venv
+- 更新 VAST_SETUP.md 加入虛擬環境建立步驟
+- 上傳 coco.zip (4.8GB) 到 Server
+- 同步 runs/ 訓練結果 (1.3GB, 10 個實驗)
+- GitHub 版本同步（以本機為準，force push）
 
 ### 2025-11-28 (下午 - 分析報告)
 - OTA 100 epochs 訓練完成，mAP@0.5 = 0.414
