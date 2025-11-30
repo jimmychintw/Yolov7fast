@@ -33,6 +33,7 @@ from utils.google_utils import attempt_download
 from utils.loss import ComputeLoss, ComputeLossOTA
 from utils.loss_router import ComputeLossRouter
 from utils.head_config import HeadConfig
+from utils.weight_transfer import load_transfer_weights
 from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
@@ -90,18 +91,30 @@ def train(hyp, opt, device, tb_writer=None):
         logger.info(f'Loading 1B{opt.heads}H head config from {opt.head_config}')
 
     pretrained = weights.endswith('.pt')
+    transfer_weights_mode = hasattr(opt, 'transfer_weights') and opt.transfer_weights
+
     if pretrained:
         with torch_distributed_zero_first(rank):
             attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location=device, weights_only=False)  # load checkpoint
         model = Model(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors'), head_config=model_head_config).to(device)  # create
-        exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
-        state_dict = ckpt['model'].float().state_dict()  # to FP32
-        state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
-        model.load_state_dict(state_dict, strict=False)  # load
-        logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
+
+        if transfer_weights_mode:
+            # 1B4H Transfer Weights Mode: Load Backbone+Neck, discard Head
+            transferred, total = load_transfer_weights(model, weights, device)
+            logger.info(f'[Transfer Mode] Transferred {transferred}/{total} items from {weights}')
+            # Don't load optimizer/ema/epoch from checkpoint in transfer mode
+            ckpt = None
+        else:
+            # Standard loading mode
+            exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
+            state_dict = ckpt['model'].float().state_dict()  # to FP32
+            state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
+            model.load_state_dict(state_dict, strict=False)  # load
+            logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
         model = Model(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors'), head_config=model_head_config).to(device)  # create
+        ckpt = None  # No checkpoint to load from
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
     train_path = data_dict['train']
@@ -210,7 +223,7 @@ def train(hyp, opt, device, tb_writer=None):
 
     # Resume
     start_epoch, best_fitness = 0, 0.0
-    if pretrained:
+    if pretrained and ckpt is not None:
         # Optimizer
         if ckpt['optimizer'] is not None:
             optimizer.load_state_dict(ckpt['optimizer'])
@@ -235,6 +248,9 @@ def train(hyp, opt, device, tb_writer=None):
             epochs += ckpt['epoch']  # finetune additional epochs
 
         del ckpt, state_dict
+    elif transfer_weights_mode:
+        # Transfer mode: start fresh training with pre-loaded backbone
+        logger.info('[Transfer Mode] Starting fresh training with pre-loaded Backbone+Neck')
 
     # Image sizes
     gs = max(int(model.stride.max()), 32)  # grid size (max stride)
@@ -591,6 +607,7 @@ if __name__ == '__main__':
     # 1B4H (One Backbone Four Heads) 參數
     parser.add_argument('--heads', type=int, default=0, help='Number of detection heads (0=disabled, 4=1B4H)')
     parser.add_argument('--head-config', type=str, default='', help='Path to head configuration YAML file')
+    parser.add_argument('--transfer-weights', action='store_true', help='Transfer weights from 1B1H to 1B4H (load Backbone+Neck, discard Head)')
     opt = parser.parse_args()
 
     # Set DDP variables
