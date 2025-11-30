@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 import torch
 from models.common import *
 from models.experimental import *
+from models.multihead import MultiHeadDetect
 from utils.autoanchor import check_anchor_order
 from utils.general import make_divisible, check_file, set_logging
 from utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
@@ -506,9 +507,10 @@ class IBin(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, cfg='yolor-csp-c.yaml', ch=3, nc=None, anchors=None):  # model, input channels, number of classes
+    def __init__(self, cfg='yolor-csp-c.yaml', ch=3, nc=None, anchors=None, head_config=None):  # model, input channels, number of classes
         super(Model, self).__init__()
         self.traced = False
+        self.head_config = head_config  # 1B4H head configuration
         if isinstance(cfg, dict):
             self.yaml = cfg  # model dict
         else:  # is *.yaml
@@ -525,7 +527,7 @@ class Model(nn.Module):
         if anchors:
             logger.info(f'Overriding model.yaml anchors with anchors={anchors}')
             self.yaml['anchors'] = round(anchors)  # override yaml value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch], head_config=head_config)  # model, savelist
         self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
         # print([x.shape for x in self.forward(torch.zeros(1, ch, 64, 64))])
 
@@ -572,6 +574,21 @@ class Model(nn.Module):
             self.stride = m.stride
             self._initialize_biases_kpt()  # only run once
             # print('Strides: %s' % m.stride.tolist())
+        if isinstance(m, MultiHeadDetect):
+            s = 256  # 2x min stride
+            # MultiHeadDetect 訓練模式返回列表，取第一個 Head 的輸出來計算 stride
+            m.train()
+            out = self.forward(torch.zeros(1, ch, s, s))
+            # out 是 [[head0_p3, head0_p4, head0_p5], [head1...], ...]
+            # 從第一個 Head 的輸出計算 stride
+            m.stride = torch.tensor([s / p.shape[-2] for p in out[0]])
+            check_anchor_order(m)
+            m.anchors /= m.stride.view(-1, 1, 1)
+            self.stride = m.stride
+            # MultiHeadDetect 有自己的 initialize_biases 方法
+            if hasattr(m, 'initialize_biases'):
+                m.initialize_biases()
+            logger.info(f'MultiHeadDetect stride: {m.stride.tolist()}')
 
         # Init weights, biases
         initialize_weights(self)
@@ -608,11 +625,11 @@ class Model(nn.Module):
                 self.traced=False
 
             if self.traced:
-                if isinstance(m, Detect) or isinstance(m, IDetect) or isinstance(m, IAuxDetect) or isinstance(m, IKeypoint):
+                if isinstance(m, (Detect, IDetect, IAuxDetect, IKeypoint, MultiHeadDetect)):
                     break
 
             if profile:
-                c = isinstance(m, (Detect, IDetect, IAuxDetect, IBin))
+                c = isinstance(m, (Detect, IDetect, IAuxDetect, IBin, MultiHeadDetect))
                 o = thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
                 for _ in range(10):
                     m(x.copy() if c else x)
@@ -733,7 +750,7 @@ class Model(nn.Module):
         model_info(self, verbose, img_size)
 
 
-def parse_model(d, ch):  # model_dict, input_channels(3)
+def parse_model(d, ch, head_config=None):  # model_dict, input_channels(3), head_config for 1B4H
     logger.info('\n%3s%18s%3s%10s  %-40s%-30s' % ('', 'from', 'n', 'params', 'module', 'arguments'))
     anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
@@ -787,10 +804,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             c2 = ch[f[0]]
         elif m is Foldcut:
             c2 = ch[f] // 2
-        elif m in [Detect, IDetect, IAuxDetect, IBin, IKeypoint]:
+        elif m in [Detect, IDetect, IAuxDetect, IBin, IKeypoint, MultiHeadDetect]:
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
+            # 為 MultiHeadDetect 傳入 head_config
+            if m is MultiHeadDetect and head_config is not None:
+                args.append(head_config)  # args = [nc, anchors, ch, head_config]
         elif m is ReOrg:
             c2 = ch[f] * 4
         elif m is Contract:

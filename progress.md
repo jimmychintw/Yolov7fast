@@ -1,6 +1,6 @@
 # 專案進度報告
 
-## 目前狀態：OTA vs non-OTA 對比實驗完成 ✅
+## 目前狀態：1B4H Phase 1 程式碼完成，待測試 🔄
 
 ### 訓練結果對比 (2025-11-28)
 
@@ -118,6 +118,23 @@ python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tin
 ---
 
 ## 變更歷史
+
+### 2025-11-30 (1B4H Phase 1 實作)
+- 建立 PRD v0.3 和 SDD v1.0 規格文件
+- 完成 Phase 1 實作計畫 (IMPLEMENTATION_PLAN_PHASE1.md)
+- **新增模組:**
+  - `utils/head_config.py` - HeadConfig 設定檔解析模組
+  - `models/multihead.py` - MultiHeadDetect 多頭檢測層
+  - `utils/loss_router.py` - ComputeLossRouter 損失路由器
+- **新增設定檔:**
+  - `data/coco_320_1b4h_standard.yaml` - 標準分類設定 (4 Heads x 20 類)
+  - `cfg/training/yolov7-tiny-1b4h.yaml` - 1B4H 模型架構
+- **修改檔案:**
+  - `train.py` - 新增 --heads, --head-config 參數
+  - `models/yolo.py` - 支援 MultiHeadDetect
+- **新增測試:**
+  - `tests/test_1b4h.py` - 單元測試 (UT-01 ~ UT-05)
+- **待執行:** 在 vast.ai 上執行單元測試和整合測試
 
 ### 2025-11-29
 - 租用新 vast.ai instance (RTX 5090)

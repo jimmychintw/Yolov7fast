@@ -31,6 +31,8 @@ from utils.general import labels_to_class_weights, increment_path, labels_to_ima
     check_requirements, print_mutation, set_logging, one_cycle, colorstr
 from utils.google_utils import attempt_download
 from utils.loss import ComputeLoss, ComputeLossOTA
+from utils.loss_router import ComputeLossRouter
+from utils.head_config import HeadConfig
 from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
@@ -80,19 +82,25 @@ def train(hyp, opt, device, tb_writer=None):
     assert len(names) == nc, '%g names found for nc=%g dataset in %s' % (len(names), nc, opt.data)  # check
 
     # Model
+    # 1B4H: 載入 head_config (如果有指定)
+    model_head_config = None
+    if hasattr(opt, 'heads') and opt.heads > 0 and hasattr(opt, 'head_config') and opt.head_config:
+        model_head_config = HeadConfig(opt.head_config)
+        logger.info(f'Loading 1B{opt.heads}H head config from {opt.head_config}')
+
     pretrained = weights.endswith('.pt')
     if pretrained:
         with torch_distributed_zero_first(rank):
             attempt_download(weights)  # download if not found locally
         ckpt = torch.load(weights, map_location=device, weights_only=False)  # load checkpoint
-        model = Model(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+        model = Model(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors'), head_config=model_head_config).to(device)  # create
         exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
         state_dict = ckpt['model'].float().state_dict()  # to FP32
         state_dict = intersect_dicts(state_dict, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(state_dict, strict=False)  # load
         logger.info('Transferred %g/%g items from %s' % (len(state_dict), len(model.state_dict()), weights))  # report
     else:
-        model = Model(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+        model = Model(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors'), head_config=model_head_config).to(device)  # create
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
     train_path = data_dict['train']
@@ -297,8 +305,20 @@ def train(hyp, opt, device, tb_writer=None):
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
     scaler = amp.GradScaler(enabled=cuda)
-    compute_loss_ota = ComputeLossOTA(model)  # init loss class
-    compute_loss = ComputeLoss(model)  # init loss class
+    # 初始化 Loss 類別
+    # 1B4H 模式: 使用 ComputeLossRouter
+    # 標準模式: 使用 ComputeLossOTA 或 ComputeLoss
+    if hasattr(opt, 'heads') and opt.heads > 0 and hasattr(opt, 'head_config') and opt.head_config:
+        head_config = HeadConfig(opt.head_config)
+        compute_loss_router = ComputeLossRouter(model, head_config)
+        compute_loss_ota = None  # 1B4H 暫不支援 OTA
+        compute_loss = None
+        logger.info(f'Using 1B{opt.heads}H architecture with {opt.head_config}')
+        logger.info(f'Head config: {head_config}')
+    else:
+        compute_loss_router = None
+        compute_loss_ota = ComputeLossOTA(model)  # init loss class
+        compute_loss = ComputeLoss(model)  # init loss class
     logger.info(f'Image sizes {imgsz} train, {imgsz_test} test\n'
                 f'Using {dataloader.num_workers} dataloader workers\n'
                 f'Logging results to {save_dir}\n'
@@ -359,7 +379,11 @@ def train(hyp, opt, device, tb_writer=None):
             # Forward
             with amp.autocast(enabled=cuda):
                 pred = model(imgs)  # forward
-                if 'loss_ota' not in hyp or hyp['loss_ota'] == 1:
+                # Loss 計算
+                if compute_loss_router is not None:
+                    # 1B4H 模式
+                    loss, loss_items = compute_loss_router(pred, targets.to(device))
+                elif 'loss_ota' not in hyp or hyp['loss_ota'] == 1:
                     loss, loss_items = compute_loss_ota(pred, targets.to(device), imgs)  # loss scaled by batch_size
                 else:
                     loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
@@ -562,6 +586,9 @@ if __name__ == '__main__':
     parser.add_argument('--artifact_alias', type=str, default="latest", help='version of dataset artifact to be used')
     parser.add_argument('--freeze', nargs='+', type=int, default=[0], help='Freeze layers: backbone of yolov7=50, first3=0 1 2')
     parser.add_argument('--v5-metric', action='store_true', help='assume maximum recall as 1.0 in AP calculation')
+    # 1B4H (One Backbone Four Heads) 參數
+    parser.add_argument('--heads', type=int, default=0, help='Number of detection heads (0=disabled, 4=1B4H)')
+    parser.add_argument('--head-config', type=str, default='', help='Path to head configuration YAML file')
     opt = parser.parse_args()
 
     # Set DDP variables
