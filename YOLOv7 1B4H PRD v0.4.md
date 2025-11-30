@@ -1,6 +1,6 @@
 # YOLOv7 1B4H 架構產品需求文檔
 
-**版本**: v0.3
+**版本**: v0.4
 **日期**: 2025-11-30
 **狀態**: Planning
 
@@ -111,6 +111,7 @@ head_assignments:
 | `--head-config` | str | 指定分類設定檔路徑 |
 | `--head-attention` | str | 啟用 Attention 機制 (cbam, se, ...) |
 | `--rl-augment` | flag | 啟用 RL 超參數優化 |
+| `--test-batch-size` | int | 驗證階段 batch size（解決 1B4H 推論 OOM）|
 
 ### 4.2 使用範例
 
@@ -119,9 +120,9 @@ head_assignments:
 python train.py --data data/coco320.yaml --img 320 \
     --cfg cfg/training/yolov7-tiny.yaml --batch-size 64 --epochs 100
 
-# 1B4H + 標準分類
+# 1B4H + 標準分類 (需使用 --test-batch-size 避免驗證 OOM)
 python train.py --data data/coco320.yaml --img 320 \
-    --cfg cfg/training/yolov7-tiny.yaml --batch-size 64 --epochs 100 \
+    --cfg cfg/training/yolov7-tiny.yaml --batch-size 384 --test-batch-size 64 --epochs 100 \
     --heads 4 --standard-grouping --head-config data/coco_320_1b4h_standard.yaml
 
 # 1B4H + 幾何分類
@@ -299,6 +300,7 @@ Combined Output: [Batch, Total_Anchors, 85]
 | Head 間類別不平衡 | 高 | 高 | 在 Loss Router 中引入 weight 加權 |
 | 多 Head 增加記憶體使用 | 中 | 中 | 優化共享 Backbone 特徵 |
 | Attention 導致推論延遲 | 中 | 低 | 使用輕量級 Attention 或 TensorRT 優化 |
+| 驗證階段 OOM | 高 | 高 | 使用 `--test-batch-size` 分離訓練/驗證 batch size |
 
 ---
 
@@ -309,3 +311,4 @@ Combined Output: [Batch, Total_Anchors, 85]
 | v0.1 | 2025-11-30 | 初版，整合架構設計 |
 | v0.2 | 2025-11-30 | 新增向下相容原則、參數設計、設定檔規範、分階段實施計畫 |
 | v0.3 | 2025-11-30 | 新增推論階段全域合併 NMS 策略 |
+| v0.4 | 2025-11-30 | 新增 `--test-batch-size` 參數解決 1B4H 驗證階段 OOM 問題 |
