@@ -2,11 +2,11 @@
 
 
 
-版本: v1.1 (Phase 1 + Weight Transfer)
+版本: v1.2 (Phase 1 + Weight Transfer + Phase 3 Attention)
 
-日期: 2025-11-30
+日期: 2025-12-01
 
-參考文件: YOLOv7 1B4H PRD v0.5
+參考文件: YOLOv7 1B4H PRD v0.6
 
 專案網址: https://github.com/jimmychintw/Yolov7fast
 
@@ -26,7 +26,8 @@
 
 在不破壞 YOLOv7 原有架構的前提下，實作 1B4H (One Backbone, Four Heads) Strategy B。
 
-Phase 1 僅支援 標準語意分類 (Standard Grouping)，並確保訓練與推論流程的正確性。
+- **Phase 1**: 標準語意分類 (Standard Grouping)，確保訓練與推論流程的正確性
+- **Phase 3**: Task-Aware Attention 機制，解決 Head 間背景雜訊干擾問題
 
 
 
@@ -44,6 +45,8 @@ Phase 1 僅支援 標準語意分類 (Standard Grouping)，並確保訓練與推
 
 
 
+#### Phase 1 資料流 (無 Attention):
+
 - 訓練階段 (Training):
 
   Input -> Backbone -> Neck -> MultiHeadDetect (輸出 4 組 Raw Tensors) -> ComputeLossRouter (動態分配標籤並計算總 Loss) -> Backprop
@@ -51,6 +54,16 @@ Phase 1 僅支援 標準語意分類 (Standard Grouping)，並確保訓練與推
 - 推論階段 (Inference):
 
   Input -> Backbone -> Neck -> MultiHeadDetect (輸出 4 組 Raw Tensors) -> Global Concatenation (拼接為單一張量) -> Standard NMS -> Output
+
+#### Phase 3 資料流 (含 Attention):
+
+- 訓練階段 (Training):
+
+  Input -> Backbone -> Neck -> [CBAM x 4] -> MultiHeadDetectAttention (輸出 4 組 Raw Tensors) -> ComputeLossRouter -> Backprop
+
+- 推論階段 (Inference):
+
+  Input -> Backbone -> Neck -> [CBAM x 4] -> MultiHeadDetectAttention -> Global Concatenation -> Standard NMS -> Output
 
 ------
 
@@ -244,7 +257,209 @@ def load_transfer_weights(model, weights_path, device):
 
 
 
-## 3. 介面與資料格式 (Interfaces & Data)
+## 3. Phase 3: Attention 模組設計 (Attention Module Design)
+
+
+
+### 3.1 CBAM 注意力模組 (Convolutional Block Attention Module)
+
+
+
+**檔案**: `models/attention.py`
+
+實作 CBAM (Convolutional Block Attention Module)，包含 Channel Attention 和 Spatial Attention 兩個子模組。
+
+#### 3.1.1 Channel Attention
+
+- **目的**: 學習「什麼」特徵重要
+- **結構**:
+  - Global Average Pooling + Global Max Pooling
+  - 共享 MLP (reduction ratio = 16)
+  - Sigmoid 激活
+
+```python
+class ChannelAttention(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False)
+        )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        avg_out = self.fc(self.avg_pool(x).view(b, c))
+        max_out = self.fc(self.max_pool(x).view(b, c))
+        return self.sigmoid(avg_out + max_out).view(b, c, 1, 1)
+```
+
+#### 3.1.2 Spatial Attention
+
+- **目的**: 學習「哪裡」重要
+- **結構**:
+  - Channel-wise Average + Max
+  - 7x7 卷積
+  - Sigmoid 激活
+
+```python
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg_out, max_out], dim=1)
+        return self.sigmoid(self.conv(x))
+```
+
+#### 3.1.3 CBAM 整合模組
+
+```python
+class CBAM(nn.Module):
+    def __init__(self, channels, reduction=16, kernel_size=7):
+        super().__init__()
+        self.channel_attention = ChannelAttention(channels, reduction)
+        self.spatial_attention = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        x = x * self.channel_attention(x)
+        x = x * self.spatial_attention(x)
+        return x
+```
+
+
+
+### 3.2 Attention 增強多頭檢測模組 (Multi-Head Detect with Attention)
+
+
+
+**檔案**: `models/multihead_attention.py`
+
+繼承自 `MultiHeadDetect`，在特徵進入 Head 之前加入 CBAM 注意力機制。
+
+- **類別**: `MultiHeadDetectAttention(MultiHeadDetect)`
+- **設計原則**: 使用繼承 + `super()`，避免複製貼上程式碼
+- **結構**:
+  - `self.attentions`: `nn.ModuleList`，長度為 `num_heads`，每個元素是一個 `CBAM` 實例
+  - 每個 Head 有獨立的 CBAM，學習專屬於該類別群組的注意力權重
+
+```python
+class MultiHeadDetectAttention(MultiHeadDetect):
+    def __init__(self, nc=80, anchors=(), ch=(), head_config=None):
+        super().__init__(nc, anchors, ch, head_config)
+
+        # 為每個 Head 建立獨立的 CBAM 模組
+        # ch = [128, 256, 512] 對應 P3, P4, P5
+        self.attentions = nn.ModuleList()
+        for _ in range(self.num_heads):
+            head_cbams = nn.ModuleList([CBAM(c) for c in ch])
+            self.attentions.append(head_cbams)
+
+    def forward(self, x):
+        # x: list of [P3, P4, P5] feature maps
+        if self.training:
+            outputs = []
+            for head_idx, (head, attn_list) in enumerate(zip(self.heads, self.attentions)):
+                head_outputs = []
+                for i, (conv, attn) in enumerate(zip(head, attn_list)):
+                    # 先通過 CBAM 過濾特徵
+                    x_filtered = attn(x[i])
+                    # 再通過 Head 卷積
+                    head_outputs.append(conv(x_filtered))
+                outputs.append(head_outputs)
+            return outputs
+        else:
+            # 推論模式：合併所有 Head 輸出
+            # 邏輯與父類相同，但特徵先經過 CBAM
+            ...
+```
+
+#### 3.2.1 Forward 邏輯說明
+
+1. **訓練模式**:
+   - 對每個 Head，先將 P3/P4/P5 特徵通過對應的 CBAM
+   - CBAM 輸出的 attention-weighted 特徵再進入 Head 的卷積層
+   - 返回 `[[head0_p3, head0_p4, head0_p5], [head1_p3, ...], ...]`
+
+2. **推論模式**:
+   - 同訓練模式，特徵先經過 CBAM
+   - 各 Head 輸出經過後處理後拼接
+   - 返回 `(concatenated_output, x)`
+
+
+
+### 3.3 模型建構器擴充 (Model Builder Extension) - Phase 3
+
+
+
+**檔案**: `models/yolo.py`
+
+- **修改 `parse_model`**:
+  - 新增對模組名稱 `'MultiHeadDetectAttention'` 的支援
+  - 當 YAML 設定檔中出現此模組時，傳入 `head_config` 參數進行實例化
+
+```python
+# 在 parse_model 函數中新增
+elif m is MultiHeadDetectAttention:
+    args.append(head_config)
+```
+
+
+
+### 3.4 設定檔範例 (Config File)
+
+
+
+**檔案**: `cfg/training/yolov7-tiny-1b4h-attn.yaml`
+
+與 `yolov7-tiny-1b4h.yaml` 相同，僅將最後一層由 `MultiHeadDetect` 改為 `MultiHeadDetectAttention`。
+
+```yaml
+# yolov7-tiny-1b4h-attn.yaml (部分)
+...
+# 最後一層
+  - [77, 1, MultiHeadDetectAttention, [nc, anchors]]
+```
+
+
+
+### 3.5 Phase 3 驗收測試
+
+
+
+- **UT-04: CBAM Forward Test**
+  - 驗證 CBAM 模組輸入輸出形狀一致
+  - 驗證 attention weight 範圍在 [0, 1]
+
+- **UT-05: MultiHeadDetectAttention Inheritance Test**
+  - 驗證 `MultiHeadDetectAttention` 正確繼承 `MultiHeadDetect`
+  - 驗證推論時輸出格式與父類一致
+
+- **IT-04: Attention 訓練啟動測試**
+  - 指令:
+    ```bash
+    python train.py \
+        --weights runs/train/noota_100ep2/weights/best.pt \
+        --transfer-weights \
+        --cfg cfg/training/yolov7-tiny-1b4h-attn.yaml \
+        --head-config data/coco_320_1b4h_standard.yaml \
+        --heads 4 \
+        --epochs 1
+    ```
+  - 標準: 成功啟動訓練迴圈，無 Crash，Loss 開始下降
+
+------
+
+
+
+## 4. 介面與資料格式 (Interfaces & Data) - Phase 1
 
 
 
@@ -272,7 +487,7 @@ head_assignments:
 
 
 
-## 4. Phase 1 驗收測試計畫 (Verification Plan)
+## 5. Phase 1 驗收測試計畫 (Verification Plan)
 
 
 

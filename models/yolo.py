@@ -9,6 +9,7 @@ import torch
 from models.common import *
 from models.experimental import *
 from models.multihead import MultiHeadDetect
+from models.multihead_attention import MultiHeadDetectAttention
 from utils.autoanchor import check_anchor_order
 from utils.general import make_divisible, check_file, set_logging
 from utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
@@ -574,9 +575,9 @@ class Model(nn.Module):
             self.stride = m.stride
             self._initialize_biases_kpt()  # only run once
             # print('Strides: %s' % m.stride.tolist())
-        if isinstance(m, MultiHeadDetect):
+        if isinstance(m, (MultiHeadDetect, MultiHeadDetectAttention)):
             s = 256  # 2x min stride
-            # MultiHeadDetect 訓練模式返回列表，取第一個 Head 的輸出來計算 stride
+            # MultiHeadDetect/MultiHeadDetectAttention 訓練模式返回列表，取第一個 Head 的輸出來計算 stride
             m.train()
             out = self.forward(torch.zeros(1, ch, s, s))
             # out 是 [[head0_p3, head0_p4, head0_p5], [head1...], ...]
@@ -585,10 +586,11 @@ class Model(nn.Module):
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            # MultiHeadDetect 有自己的 initialize_biases 方法
+            # MultiHeadDetect/MultiHeadDetectAttention 有自己的 initialize_biases 方法
             if hasattr(m, 'initialize_biases'):
                 m.initialize_biases()
-            logger.info(f'MultiHeadDetect stride: {m.stride.tolist()}')
+            module_name = 'MultiHeadDetectAttention' if isinstance(m, MultiHeadDetectAttention) else 'MultiHeadDetect'
+            logger.info(f'{module_name} stride: {m.stride.tolist()}')
 
         # Init weights, biases
         initialize_weights(self)
@@ -625,11 +627,11 @@ class Model(nn.Module):
                 self.traced=False
 
             if self.traced:
-                if isinstance(m, (Detect, IDetect, IAuxDetect, IKeypoint, MultiHeadDetect)):
+                if isinstance(m, (Detect, IDetect, IAuxDetect, IKeypoint, MultiHeadDetect, MultiHeadDetectAttention)):
                     break
 
             if profile:
-                c = isinstance(m, (Detect, IDetect, IAuxDetect, IBin, MultiHeadDetect))
+                c = isinstance(m, (Detect, IDetect, IAuxDetect, IBin, MultiHeadDetect, MultiHeadDetectAttention))
                 o = thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1E9 * 2 if thop else 0  # FLOPS
                 for _ in range(10):
                     m(x.copy() if c else x)
@@ -804,12 +806,12 @@ def parse_model(d, ch, head_config=None):  # model_dict, input_channels(3), head
             c2 = ch[f[0]]
         elif m is Foldcut:
             c2 = ch[f] // 2
-        elif m in [Detect, IDetect, IAuxDetect, IBin, IKeypoint, MultiHeadDetect]:
+        elif m in [Detect, IDetect, IAuxDetect, IBin, IKeypoint, MultiHeadDetect, MultiHeadDetectAttention]:
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
-            # 為 MultiHeadDetect 傳入 head_config
-            if m is MultiHeadDetect and head_config is not None:
+            # 為 MultiHeadDetect / MultiHeadDetectAttention 傳入 head_config
+            if m in [MultiHeadDetect, MultiHeadDetectAttention] and head_config is not None:
                 args.append(head_config)  # args = [nc, anchors, ch, head_config]
         elif m is ReOrg:
             c2 = ch[f] * 4

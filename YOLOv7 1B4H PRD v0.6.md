@@ -1,6 +1,6 @@
 # YOLOv7 1B4H 架構產品需求文檔
 
-**版本**: v0.5
+**版本**: v0.6
 **日期**: 2025-11-30
 **狀態**: Planning
 
@@ -281,7 +281,8 @@ Combined Output: [Batch, Total_Anchors, 85]
 | HeadConfig | `utils/head_config.py` | 設定檔載入 | Phase 1 |
 | WeightTransfer | `utils/weight_transfer.py` | 智慧權重遷移 | Phase 1 |
 | GeometryGrouping | `utils/geometry_grouping.py` | K-Means 分群 | Phase 2 |
-| HeadAttention | `models/attention.py` | CBAM/SE 注意力 | Phase 3 |
+| CBAM | `models/attention.py` | Channel + Spatial Attention | Phase 3 |
+| MultiHeadDetectAttention | `models/multihead_attention.py` | Attention 增強多頭檢測 | Phase 3 |
 | RLAugment | `utils/rl_augment.py` | RL 超參數優化 | Phase 4 |
 
 ### 7.2 設定檔
@@ -292,6 +293,7 @@ Combined Output: [Batch, Total_Anchors, 85]
 | `data/coco_640_1b4h_standard.yaml` | 640 標準分類設定 | Phase 1 |
 | `data/coco_320_1b4h_geometry.yaml` | 320 幾何分類設定 | Phase 2 |
 | `data/coco_640_1b4h_geometry.yaml` | 640 幾何分類設定 | Phase 2 |
+| `cfg/training/yolov7-tiny-1b4h-attn.yaml` | 1B4H + Attention 模型架構 | Phase 3 |
 
 ---
 
@@ -309,10 +311,19 @@ Combined Output: [Batch, Total_Anchors, 85]
 - **目標**: 實作 K-Means 自動分群
 - **產出**: GeometryGrouping 模組, 幾何分類設定檔
 
-### Phase 3: Attention 機制（順序待定）
+### Phase 3: Task-Aware Attention 機制
 
-- **目標**: 加入 CBAM/SE 注意力機制
-- **產出**: HeadAttention 模組
+- **目標**: 解決 Head 受到背景雜訊干擾的問題
+- **方法**: 在每個 Head 之前引入 **CBAM (Convolutional Block Attention Module)**
+- **架構**: `MultiHeadDetectAttention` 繼承自 `MultiHeadDetect`
+- **預期效果**:
+  - Head 0 (人物) 的 Attention 會自動過濾掉 Head 1 (車輛) 的特徵
+  - 提升各 Head 的 Precision 與 Recall
+  - 減少跨類別的 False Positive
+- **產出**:
+  - `models/attention.py` (CBAM 模組)
+  - `models/multihead_attention.py` (MultiHeadDetectAttention)
+  - `cfg/training/yolov7-tiny-1b4h-attn.yaml`
 
 ### Phase 4: RL 超參數優化（順序待定）
 
@@ -346,3 +357,4 @@ Combined Output: [Batch, Total_Anchors, 85]
 | v0.3 | 2025-11-30 | 新增推論階段全域合併 NMS 策略 |
 | v0.4 | 2025-11-30 | 新增 `--test-batch-size` 參數解決 1B4H 驗證階段 OOM 問題 |
 | v0.5 | 2025-11-30 | 新增 `--transfer-weights` 參數和訓練策略章節（智慧權重遷移）|
+| v0.6 | 2025-12-01 | 更新 Phase 3 Task-Aware Attention 設計，新增 CBAM 和 MultiHeadDetectAttention 模組規範 |
