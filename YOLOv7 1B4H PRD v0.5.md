@@ -1,6 +1,6 @@
 # YOLOv7 1B4H 架構產品需求文檔
 
-**版本**: v0.4
+**版本**: v0.5
 **日期**: 2025-11-30
 **狀態**: Planning
 
@@ -112,6 +112,7 @@ head_assignments:
 | `--head-attention` | str | 啟用 Attention 機制 (cbam, se, ...) |
 | `--rl-augment` | flag | 啟用 RL 超參數優化 |
 | `--test-batch-size` | int | 驗證階段 batch size（解決 1B4H 推論 OOM）|
+| `--transfer-weights` | flag | 啟用智慧權重遷移（載入 Backbone/Neck，捨棄 Head）|
 
 ### 4.2 使用範例
 
@@ -146,13 +147,44 @@ python train.py --data data/coco320.yaml --img 320 \
     --cfg cfg/training/yolov7-tiny.yaml --batch-size 64 --epochs 100 \
     --heads 4 --standard-grouping --head-config data/coco_320_1b4h_standard.yaml \
     --rl-augment
+
+# 1B4H + 標準分類 + 載入 1B1H 預訓練權重 (推薦)
+python train.py --weights runs/train/noota_100ep2/weights/best.pt \
+    --data data/coco320.yaml --img 320 \
+    --cfg cfg/training/yolov7-tiny-1b4h.yaml --batch-size 384 --test-batch-size 64 --epochs 100 \
+    --heads 4 --head-config data/coco_320_1b4h_standard.yaml \
+    --transfer-weights
 ```
 
 ---
 
-## 5. 系統架構
+## 5. 訓練策略 (Training Strategy)
 
-### 5.1 原始架構 (Baseline)
+### 5.1 權重遷移機制 (Weight Transfer)
+
+為解決 1B4H 架構冷啟動收斂慢的問題，支援從 1B1H 模型遷移權重。
+
+- **來源**: 1B1H 預訓練模型（如 `yolov7-tiny.pt` 或自訓練版本）
+- **目標**: 1B4H 模型
+- **邏輯**:
+  1. 載入來源 `.pt` 檔案
+  2. 比對來源與目標的層名稱 (Layer Names) 與形狀 (Shapes)
+  3. **保留**: 形狀完全匹配的層（即 Backbone + Neck）
+  4. **捨棄**: 形狀不匹配的層（即 Detect Head，因為 1B1H 輸出通道數與 1B4H 不同）
+  5. **初始化**: 被捨棄的 Head 層採用預設初始化
+
+### 5.2 預期效果
+
+| 訓練方式 | Epoch 1 mAP | 收斂速度 |
+|----------|-------------|----------|
+| 從零開始 | ~0.01 | 慢 |
+| 權重遷移 | ~0.15+ | 快 |
+
+---
+
+## 6. 系統架構
+
+### 6.1 原始架構 (Baseline)
 
 ```
 Input → Backbone (CSPDarknet) → Neck (PANet) → Detect Head → Output
@@ -160,7 +192,7 @@ Input → Backbone (CSPDarknet) → Neck (PANet) → Detect Head → Output
                                               80 類預測
 ```
 
-### 5.2 1B4H 架構
+### 6.2 1B4H 架構
 
 ```
 Input → Backbone (CSPDarknet) → Neck (PANet) → P3/P4/P5 特徵
@@ -179,7 +211,7 @@ Input → Backbone (CSPDarknet) → Neck (PANet) → P3/P4/P5 特徵
                                       80 類預測
 ```
 
-### 5.3 1B4H + Attention 架構（未來）
+### 6.3 1B4H + Attention 架構（未來）
 
 ```
 Input → Backbone → Neck → P3/P4/P5 特徵
@@ -199,7 +231,7 @@ Input → Backbone → Neck → P3/P4/P5 特徵
                         80 類預測
 ```
 
-### 5.4 推論階段：全域合併 NMS
+### 6.4 推論階段：全域合併 NMS
 
 為確保跨檢測頭 (Cross-Head) 的預測結果一致性，推論階段採用**「全域合併 NMS (Global Concatenation NMS)」**策略。
 
@@ -238,20 +270,21 @@ Combined Output: [Batch, Total_Anchors, 85]
 
 ---
 
-## 6. 開發模組
+## 7. 開發模組
 
-### 6.1 核心模組
+### 7.1 核心模組
 
 | 模組 | 檔案 | 功能 | 階段 |
 |------|------|------|------|
 | MultiHeadDetect | `models/multihead.py` | 多檢測頭架構 | Phase 1 |
 | ComputeLossRouter | `utils/loss_router.py` | 損失路由器 | Phase 1 |
 | HeadConfig | `utils/head_config.py` | 設定檔載入 | Phase 1 |
+| WeightTransfer | `utils/weight_transfer.py` | 智慧權重遷移 | Phase 1 |
 | GeometryGrouping | `utils/geometry_grouping.py` | K-Means 分群 | Phase 2 |
 | HeadAttention | `models/attention.py` | CBAM/SE 注意力 | Phase 3 |
 | RLAugment | `utils/rl_augment.py` | RL 超參數優化 | Phase 4 |
 
-### 6.2 設定檔
+### 7.2 設定檔
 
 | 檔案 | 功能 | 階段 |
 |------|------|------|
@@ -262,7 +295,7 @@ Combined Output: [Batch, Total_Anchors, 85]
 
 ---
 
-## 7. 實施階段
+## 8. 實施階段
 
 ### Phase 1: 標準分類 1B4H 驗證（優先）
 
@@ -293,7 +326,7 @@ Combined Output: [Batch, Total_Anchors, 85]
 
 ---
 
-## 8. 風險與緩解
+## 9. 風險與緩解
 
 | 風險 | 可能性 | 嚴重性 | 緩解措施 |
 |------|--------|--------|----------|
@@ -304,7 +337,7 @@ Combined Output: [Batch, Total_Anchors, 85]
 
 ---
 
-## 9. 變更歷史
+## 10. 變更歷史
 
 | 版本 | 日期 | 變更內容 |
 |------|------|----------|
@@ -312,3 +345,4 @@ Combined Output: [Batch, Total_Anchors, 85]
 | v0.2 | 2025-11-30 | 新增向下相容原則、參數設計、設定檔規範、分階段實施計畫 |
 | v0.3 | 2025-11-30 | 新增推論階段全域合併 NMS 策略 |
 | v0.4 | 2025-11-30 | 新增 `--test-batch-size` 參數解決 1B4H 驗證階段 OOM 問題 |
+| v0.5 | 2025-11-30 | 新增 `--transfer-weights` 參數和訓練策略章節（智慧權重遷移）|

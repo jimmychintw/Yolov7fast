@@ -2,11 +2,11 @@
 
 
 
-版本: v1.0 (Phase 1 Baseline)
+版本: v1.1 (Phase 1 + Weight Transfer)
 
 日期: 2025-11-30
 
-參考文件: YOLOv7 1B4H PRD v0.4
+參考文件: YOLOv7 1B4H PRD v0.5
 
 專案網址: https://github.com/jimmychintw/Yolov7fast
 
@@ -192,6 +192,58 @@ python train.py \
 
 
 
+### 2.6 權重遷移模組 (Weight Transfer Utility)
+
+
+
+**檔案**: `utils/weight_transfer.py`
+
+負責處理從單頭模型到多頭模型的權重載入。
+
+- **函式**: `load_transfer_weights(model, weights_path, device)`
+
+- **邏輯**:
+
+```python
+def load_transfer_weights(model, weights_path, device):
+    # 1. 載入 checkpoint
+    ckpt = torch.load(weights_path, map_location=device, weights_only=False)
+    state_dict = ckpt['model'].float().state_dict()
+
+    # 2. 獲取當前模型結構
+    model_state_dict = model.state_dict()
+
+    # 3. 過濾權重 (Intersect)
+    # 只保留名稱相同且形狀完全一致的權重
+    # 這會自動過濾掉 Detect Head (因為通道數不同)
+    intersect_dict = {k: v for k, v in state_dict.items()
+                      if k in model_state_dict and v.shape == model_state_dict[k].shape}
+
+    # 4. 載入
+    model.load_state_dict(intersect_dict, strict=False)
+    return len(intersect_dict), len(model_state_dict)
+```
+
+- **輸出訊息**: `Transferred X/Y items (Backbone + Neck loaded, Head initialized)`
+
+
+
+### 2.7 訓練腳本整合 (Training Script) - 權重遷移
+
+
+
+**檔案**: `train.py`
+
+- **新增 CLI 參數**: `--transfer-weights` (flag)
+- **修改點**:
+  - 在模型初始化 (`Model()`) 之後，標準權重載入之前
+  - 檢查 `opt.transfer_weights` 參數
+  - 若為 True，呼叫 `load_transfer_weights` 取代標準載入流程
+
+------
+
+
+
 ## 3. 介面與資料格式 (Interfaces & Data)
 
 
@@ -250,6 +302,12 @@ head_assignments:
   - 標準: 成功啟動訓練迴圈，無 Crash，Loss 開始下降。
 - **IT-02: 推論測試**
   - 使用 IT-01 產出的 `best.pt` 執行 `detect.py`，驗證 NMS 是否正常過濾重疊框。
+- **IT-03: 權重遷移載入測試**
+  - 輸入: `--weights runs/train/noota_100ep2/weights/best.pt --transfer-weights`
+  - 驗證:
+    - 控制台顯示 "Transferred X/Y items"
+    - X 應接近 Y（約少 10-20 個項目，即 Head 的權重數）
+    - 訓練第 1 個 Epoch 的 mAP 應顯著大於 0（例如 > 0.05），證明 Backbone 有效
 
 ------
 
