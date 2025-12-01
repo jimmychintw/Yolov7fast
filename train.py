@@ -651,6 +651,32 @@ if __name__ == '__main__':
     with open(opt.hyp) as f:
         hyp = yaml.load(f, Loader=yaml.SafeLoader)  # load hyps
 
+    # ---------------------------------------------------
+    # Auto LR Scaling (Square Root Strategy for 1B4H)
+    # Reference: SDD v1.3, Section 2.8
+    # ---------------------------------------------------
+    nbs = 64  # nominal batch size
+    current_bs = opt.batch_size
+
+    if current_bs > nbs:
+        # Scale factor using Square Root (More stable than Linear for Multi-Head)
+        scale_factor = (current_bs / nbs) ** 0.5
+
+        # Save original for logging
+        original_lr = hyp['lr0']
+
+        # Update LR
+        hyp['lr0'] *= scale_factor
+
+        # Auto-adjust warmup if batch is large (optional but recommended)
+        if current_bs >= 128:
+            hyp['warmup_epochs'] = max(hyp.get('warmup_epochs', 3.0), 5.0)
+
+        logger.info(f"[Auto-LR] Batch Size {current_bs} > {nbs}. Scaling LR by {scale_factor:.4f}x")
+        logger.info(f"[Auto-LR] LR0: {original_lr:.4f} -> {hyp['lr0']:.4f}")
+        logger.info(f"[Auto-LR] Warmup Epochs: {hyp.get('warmup_epochs', 3.0)}")
+    # ---------------------------------------------------
+
     # Train
     logger.info(opt)
     if not opt.evolve:
