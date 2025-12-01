@@ -265,6 +265,16 @@ def load_transfer_weights(model, weights_path, device):
 
 **目的**: 當使用大 Batch Size (如 128, 384) 時，自動調整 Learning Rate 以加速收斂。
 
+**啟用方式**: 需明確加上 `--auto-lr` 參數才會啟用，預設為關閉。
+
+```bash
+# 啟用 Auto LR Scaling
+python train.py --batch-size 384 --auto-lr ...
+
+# 不啟用（預設行為，使用原始 LR）
+python train.py --batch-size 384 ...
+```
+
 #### 2.8.1 設計原理
 
 原生 YOLOv7 針對 `nbs = 64` (nominal batch size) 優化。若加大 Batch 但不調整 LR，會導致：
@@ -286,27 +296,31 @@ def load_transfer_weights(model, weights_path, device):
 ```python
 # ---------------------------------------------------
 # Auto LR Scaling (Square Root Strategy for 1B4H)
+# Requires --auto-lr flag to enable
 # ---------------------------------------------------
-nbs = 64  # nominal batch size
-current_bs = opt.batch_size
+if opt.auto_lr:
+    nbs = 64  # nominal batch size
+    current_bs = opt.batch_size
 
-if current_bs > nbs:
-    # Scale factor using Square Root (More stable than Linear for Multi-Head)
-    scale_factor = (current_bs / nbs) ** 0.5
+    if current_bs > nbs:
+        # Scale factor using Square Root (More stable than Linear for Multi-Head)
+        scale_factor = (current_bs / nbs) ** 0.5
 
-    # Save original for logging
-    original_lr = hyp['lr0']
+        # Save original for logging
+        original_lr = hyp['lr0']
 
-    # Update LR
-    hyp['lr0'] *= scale_factor
+        # Update LR
+        hyp['lr0'] *= scale_factor
 
-    # Auto-adjust warmup if batch is large (optional but recommended)
-    if current_bs >= 128:
-        hyp['warmup_epochs'] = max(hyp.get('warmup_epochs', 3.0), 5.0)
+        # Auto-adjust warmup if batch is large (optional but recommended)
+        if current_bs >= 128:
+            hyp['warmup_epochs'] = max(hyp.get('warmup_epochs', 3.0), 5.0)
 
-    logger.info(f"[Auto-LR] Batch Size {current_bs} > {nbs}. Scaling LR by {scale_factor:.4f}x")
-    logger.info(f"[Auto-LR] LR0: {original_lr:.4f} -> {hyp['lr0']:.4f}")
-    logger.info(f"[Auto-LR] Warmup Epochs: {hyp.get('warmup_epochs', 3.0)}")
+        logger.info(f"[Auto-LR] Batch Size {current_bs} > {nbs}. Scaling LR by {scale_factor:.4f}x")
+        logger.info(f"[Auto-LR] LR0: {original_lr:.4f} -> {hyp['lr0']:.4f}")
+        logger.info(f"[Auto-LR] Warmup Epochs: {hyp.get('warmup_epochs', 3.0)}")
+    else:
+        logger.info(f"[Auto-LR] Enabled but batch size {current_bs} <= {nbs}, no scaling applied")
 # ---------------------------------------------------
 ```
 
@@ -322,7 +336,7 @@ if current_bs > nbs:
 #### 2.8.5 驗證測試
 
 - **UT-06: Auto LR Scaling Test**
-  - 指令: `python train.py --batch-size 384 --epochs 1 --cfg cfg/training/yolov7-tiny.yaml`
+  - 指令: `python train.py --batch-size 384 --auto-lr --epochs 1 --cfg cfg/training/yolov7-tiny.yaml`
   - 驗證: 控制台顯示 `[Auto-LR] LR0: 0.0100 -> 0.0245`
 
 ------

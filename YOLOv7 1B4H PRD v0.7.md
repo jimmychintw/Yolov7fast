@@ -184,6 +184,16 @@ python train.py --weights runs/train/noota_100ep2/weights/best.pt \
 
 為充分利用 RTX 5090 大顯存優勢，支援大 Batch Size (如 128, 384) 訓練。
 
+**啟用方式**: 需明確加上 `--auto-lr` 參數才會啟用，預設為關閉。
+
+```bash
+# 啟用 Auto LR Scaling
+python train.py --batch-size 384 --auto-lr ...
+
+# 不啟用（預設行為，使用原始 LR）
+python train.py --batch-size 384 ...
+```
+
 #### 問題背景
 
 - 原生 YOLOv7 針對 `nbs = 64` (nominal batch size) 優化

@@ -608,6 +608,7 @@ if __name__ == '__main__':
     parser.add_argument('--heads', type=int, default=0, help='Number of detection heads (0=disabled, 4=1B4H)')
     parser.add_argument('--head-config', type=str, default='', help='Path to head configuration YAML file')
     parser.add_argument('--transfer-weights', action='store_true', help='Transfer weights from 1B1H to 1B4H (load Backbone+Neck, discard Head)')
+    parser.add_argument('--auto-lr', action='store_true', help='Enable Auto LR Scaling: lr0 *= sqrt(batch_size/64) when batch > 64')
     opt = parser.parse_args()
 
     # Set DDP variables
@@ -654,27 +655,31 @@ if __name__ == '__main__':
     # ---------------------------------------------------
     # Auto LR Scaling (Square Root Strategy for 1B4H)
     # Reference: SDD v1.3, Section 2.8
+    # Requires --auto-lr flag to enable
     # ---------------------------------------------------
-    nbs = 64  # nominal batch size
-    current_bs = opt.batch_size
+    if opt.auto_lr:
+        nbs = 64  # nominal batch size
+        current_bs = opt.batch_size
 
-    if current_bs > nbs:
-        # Scale factor using Square Root (More stable than Linear for Multi-Head)
-        scale_factor = (current_bs / nbs) ** 0.5
+        if current_bs > nbs:
+            # Scale factor using Square Root (More stable than Linear for Multi-Head)
+            scale_factor = (current_bs / nbs) ** 0.5
 
-        # Save original for logging
-        original_lr = hyp['lr0']
+            # Save original for logging
+            original_lr = hyp['lr0']
 
-        # Update LR
-        hyp['lr0'] *= scale_factor
+            # Update LR
+            hyp['lr0'] *= scale_factor
 
-        # Auto-adjust warmup if batch is large (optional but recommended)
-        if current_bs >= 128:
-            hyp['warmup_epochs'] = max(hyp.get('warmup_epochs', 3.0), 5.0)
+            # Auto-adjust warmup if batch is large (optional but recommended)
+            if current_bs >= 128:
+                hyp['warmup_epochs'] = max(hyp.get('warmup_epochs', 3.0), 5.0)
 
-        logger.info(f"[Auto-LR] Batch Size {current_bs} > {nbs}. Scaling LR by {scale_factor:.4f}x")
-        logger.info(f"[Auto-LR] LR0: {original_lr:.4f} -> {hyp['lr0']:.4f}")
-        logger.info(f"[Auto-LR] Warmup Epochs: {hyp.get('warmup_epochs', 3.0)}")
+            logger.info(f"[Auto-LR] Batch Size {current_bs} > {nbs}. Scaling LR by {scale_factor:.4f}x")
+            logger.info(f"[Auto-LR] LR0: {original_lr:.4f} -> {hyp['lr0']:.4f}")
+            logger.info(f"[Auto-LR] Warmup Epochs: {hyp.get('warmup_epochs', 3.0)}")
+        else:
+            logger.info(f"[Auto-LR] Enabled but batch size {current_bs} <= {nbs}, no scaling applied")
     # ---------------------------------------------------
 
     # Train
