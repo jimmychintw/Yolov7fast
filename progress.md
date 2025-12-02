@@ -1,6 +1,84 @@
 # 專案進度報告
 
-## 目前狀態：1B4H Phase 1 測試中，待實作權重遷移 🔄
+## 目前狀態：1B4H 多種分類策略比較中 🔄
+
+---
+
+## 待執行計畫
+
+### 1B4H AntiConfusion 分類訓練（待執行）
+
+基於 1B1H 500ep 混淆矩陣分析，設計「反混淆」分類策略。
+
+**設定檔**: `data/coco_320_1b4h_anticonfusion.yaml`
+
+**分類特點**:
+| Head | 類別數 | 樣本數 | 佔比 | 說明 |
+|------|--------|--------|------|------|
+| Head 0 | 1 | 262,465 | 30.5% | person 專用 |
+| Head 1 | 26 | 199,806 | 23.2% | car, motorcycle, bird, couch... |
+| Head 2 | 26 | 198,854 | 23.1% | bus, cat, sheep, chair, knife... |
+| Head 3 | 27 | 198,876 | 23.1% | bicycle, truck, dog, cow, fork... |
+
+**核心優勢**: 19 對高混淆類別全部分開（car↔truck, cat↔dog, fork↔knife 等）
+
+**訓練指令**:
+```bash
+python train.py --img-size 320 320 --batch-size 64 --epochs 500 \
+    --weights runs/train/20251201_1b1h_500ep_bs128/weights/best.pt \
+    --transfer-weights --freeze 50 \
+    --data data/coco320.yaml --cfg cfg/training/yolov7-tiny-1b4h.yaml \
+    --hyp data/hyp.scratch.tiny.noota.yaml --device 0 --workers 16 \
+    --project runs/train --name 1b4h_anticonfusion_500ep \
+    --noautoanchor --cache-images --heads 4 \
+    --head-config data/coco_320_1b4h_anticonfusion.yaml
+```
+
+**相關文件**: [混淆矩陣與分類策略.md](混淆矩陣與分類策略.md)
+
+---
+
+### 1B4H Hybrid Balanced 監控（進行中）
+
+**目前狀態**: ep 171/500，mAP@0.5 = 0.4222，已進入 plateau
+
+**診斷結果** (2025-12-02):
+- 最近 30 epochs mAP 波動僅 0.002
+- 趨勢斜率 ≈ 0（無上升趨勢）
+- Loss 仍緩慢下降，但 mAP 不動
+- **判斷：深陷泥淖 (plateau)**
+
+**監控計畫**: 讓它跑到 ep 220，觀察是否突破
+
+| 情況 | mAP@0.5 @ ep220 | 行動 |
+|------|-----------------|------|
+| 突破 | > 0.430 | 繼續跑到 500 |
+| 小幅上升 | 0.425-0.430 | 考慮繼續 |
+| 持平 | 0.420-0.425 | 停止，換跑 AntiConfusion |
+| 下降 | < 0.420 | 停止，已過擬合 |
+
+---
+
+## 1B4H 訓練結果比較 (2025-12-02)
+
+| 訓練名稱 | 分類方式 | Epochs | Best mAP@0.5 | 狀態 |
+|----------|----------|--------|--------------|------|
+| 1B1H 500ep | 無分類 | 500 | **0.4353** | ✅ 完成 |
+| 1B4H Standard | 語意分類 | 100 | 0.4263 | ✅ 完成 |
+| 1B4H Geometry | 幾何分類 | 200 | 0.4283 | ✅ 完成 |
+| 1B4H Hybrid Balanced | 混合分類 | 500 | 訓練中 | 🔄 進行中 |
+| **1B4H AntiConfusion** | **反混淆分類** | 500 | - | ⏳ 待執行 |
+
+### Epoch 100 公平比較
+
+| 分類方式 | mAP@0.5 @ ep100 | vs 1B1H |
+|----------|-----------------|---------|
+| 1B4H Standard | 0.4259 | +21.4% |
+| 1B4H Geometry | 0.4232 | +20.6% |
+| 1B4H Hybrid | 0.4206 | +19.9% |
+| 1B1H | 0.3508 | baseline |
+
+---
 
 ### 1B4H 訓練初步結果 (2025-11-30)
 
@@ -120,6 +198,14 @@ python train.py --data data/coco320.yaml --img 320 --cfg cfg/training/yolov7-tin
 ---
 
 ## 變更歷史
+
+### 2025-12-02 (混淆矩陣分析與反混淆分類)
+- 分析 1B1H 500ep 混淆矩陣，識別 19 對高混淆類別
+- 設計「反混淆」分類策略，確保混淆類別分到不同 Head
+- 建立 `data/coco_320_1b4h_anticonfusion.yaml` 設定檔
+- 撰寫 `混淆矩陣與分類策略.md` 分析報告
+- 建立四組訓練比較圖 `training_4_comparison.png`
+- 更新 progress.md 加入待執行計畫
 
 ### 2025-11-30 (1B4H Phase 1 實作)
 - 建立 PRD v0.3 和 SDD v1.0 規格文件
