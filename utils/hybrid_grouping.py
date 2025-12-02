@@ -24,6 +24,69 @@ import os
 from collections import defaultdict
 
 
+def balance_clusters(labels, hybrid_sim, n_heads, n_classes, target_range=(15, 25)):
+    """
+    平衡各群組的類別數量
+
+    透過將邊界類別從過大的群組移動到過小的群組來達成平衡。
+    邊界類別 = 與目標群組有較高相似度的類別
+
+    Args:
+        labels: 原始分群標籤 (n_classes,)
+        hybrid_sim: 混合相似度矩陣 (n_classes, n_classes)
+        n_heads: Head 數量
+        n_classes: 類別總數
+        target_range: 目標類別數範圍 (min, max)
+
+    Returns:
+        balanced_labels: 平衡後的分群標籤
+    """
+    balanced_labels = labels.copy()
+    min_size, max_size = target_range
+    ideal_size = n_classes // n_heads
+
+    max_iterations = 100
+    for iteration in range(max_iterations):
+        # 計算各群組大小
+        cluster_sizes = {h: 0 for h in range(n_heads)}
+        for label in balanced_labels:
+            cluster_sizes[label] += 1
+
+        # 找出過大和過小的群組
+        oversized = [h for h, s in cluster_sizes.items() if s > max_size]
+        undersized = [h for h, s in cluster_sizes.items() if s < min_size]
+
+        if not oversized or not undersized:
+            break
+
+        # 從最大的群組移動到最小的群組
+        largest = max(oversized, key=lambda h: cluster_sizes[h])
+        smallest = min(undersized, key=lambda h: cluster_sizes[h])
+
+        # 找出 largest 群組中與 smallest 群組最相似的類別 (邊界類別)
+        classes_in_largest = [i for i, l in enumerate(balanced_labels) if l == largest]
+        classes_in_smallest = [i for i, l in enumerate(balanced_labels) if l == smallest]
+
+        best_class = None
+        best_similarity = -1
+
+        for cls in classes_in_largest:
+            # 計算該類別與 smallest 群組的平均相似度
+            if classes_in_smallest:
+                avg_sim = np.mean([hybrid_sim[cls, c] for c in classes_in_smallest])
+            else:
+                avg_sim = 0
+
+            if avg_sim > best_similarity:
+                best_similarity = avg_sim
+                best_class = cls
+
+        if best_class is not None:
+            balanced_labels[best_class] = smallest
+
+    return balanced_labels
+
+
 def compute_geometry_similarity(annotations, coco_id_to_train_id, n_classes=80):
     """
     計算幾何相似度矩陣
@@ -124,6 +187,7 @@ def generate_hybrid_config(
     n_heads=4,
     alpha=0.5,  # 幾何權重
     beta=0.5,   # 共現權重
+    balance=False,  # 是否平衡類別數
     verbose=True
 ):
     """
@@ -135,6 +199,7 @@ def generate_hybrid_config(
         n_heads: Head 數量
         alpha: 幾何相似度權重 (0-1)
         beta: 共現相似度權重 (0-1)
+        balance: 是否啟用類別數平衡 (目標每個 Head 15-25 類)
         verbose: 是否輸出詳細資訊
     """
     # 正規化權重
@@ -147,6 +212,7 @@ def generate_hybrid_config(
         print(f"  - 幾何權重 (α): {alpha:.2f}")
         print(f"  - 共現權重 (β): {beta:.2f}")
         print(f"  - Head 數量: {n_heads}")
+        print(f"  - 類別數平衡: {'啟用' if balance else '停用'}")
         print()
 
     # 檢查路徑
@@ -201,6 +267,21 @@ def generate_hybrid_config(
         assign_labels='kmeans'
     )
     labels = clustering.fit_predict(hybrid_sim)
+
+    # 顯示原始分群結果
+    if verbose:
+        original_sizes = [sum(labels == h) for h in range(n_heads)]
+        print(f"  原始分群大小: {original_sizes}")
+
+    # 平衡類別數 (如果啟用)
+    if balance:
+        print("[4.5/4] 執行類別數平衡...")
+        # 目標範圍：80/4 = 20，允許 ±5
+        target_range = (n_classes // n_heads - 5, n_classes // n_heads + 5)
+        labels = balance_clusters(labels, hybrid_sim, n_heads, n_classes, target_range)
+        if verbose:
+            balanced_sizes = [sum(labels == h) for h in range(n_heads)]
+            print(f"  平衡後分群大小: {balanced_sizes}")
 
     # 整理結果：根據每個群組的平均幾何比例排序
     cluster_avg_ratio = {}
@@ -275,9 +356,10 @@ def generate_hybrid_config(
     yaml_data = {
         'nc': n_classes,
         'heads': n_heads,
-        'grouping': 'hybrid_spectral',
+        'grouping': 'hybrid_spectral_balanced' if balance else 'hybrid_spectral',
         'alpha': round(alpha, 2),
         'beta': round(beta, 2),
+        'balanced': balance,
         'generated_by': 'utils/hybrid_grouping.py',
         'head_assignments': head_assignments
     }
@@ -368,6 +450,7 @@ if __name__ == "__main__":
     parser.add_argument('--heads', type=int, default=4, help='Number of heads')
     parser.add_argument('--alpha', type=float, default=0.5, help='Geometry weight')
     parser.add_argument('--beta', type=float, default=0.5, help='Co-occurrence weight')
+    parser.add_argument('--balance', action='store_true', help='Enable class count balancing (target: 15-25 per head)')
     parser.add_argument('--analyze', action='store_true', help='Analyze existing config')
 
     args = parser.parse_args()
@@ -380,5 +463,6 @@ if __name__ == "__main__":
             output_path=args.output,
             n_heads=args.heads,
             alpha=args.alpha,
-            beta=args.beta
+            beta=args.beta,
+            balance=args.balance
         )
