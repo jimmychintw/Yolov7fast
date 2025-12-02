@@ -254,10 +254,10 @@ def generate_hybrid_config(
         head_key = f'head_{new_head_id}'
         head_assignments[head_key] = {
             'name': f"{desc}_Group",
-            'classes': classes_in_head,
+            'classes': [int(c) for c in classes_in_head],  # 確保是 Python int
             'weight': 1.0,
-            'avg_ratio': round(avg_ratio_val, 3),
-            'avg_cooccurrence': round(avg_cooccur, 1),
+            'avg_ratio': float(round(avg_ratio_val, 3)),  # 轉為 Python float
+            'avg_cooccurrence': float(round(avg_cooccur, 1)),  # 轉為 Python float
             'comment': f"Ratio: {avg_ratio_val:.2f}, Avg Co-occur: {avg_cooccur:.1f}"
         }
 
