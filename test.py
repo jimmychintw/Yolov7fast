@@ -40,7 +40,8 @@ def test(data,
          half_precision=True,
          trace=False,
          is_coco=False,
-         v5_metric=False):
+         v5_metric=False,
+         save_per_class_ap=None):  # path to save per-class AP JSON (optional)
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -237,6 +238,18 @@ def test(data,
         for i, c in enumerate(ap_class):
             print(pf % (names[c], seen, nt[c], p[i], r[i], ap50[i], ap[i]))
 
+    # Save per-class AP to JSON (for RL augmentation search)
+    if save_per_class_ap and len(stats) and stats[0].any():
+        per_class_ap_data = {
+            'map50': float(map50),
+            'map': float(map),
+            'per_class': {int(c): {'ap50': float(ap50[i]), 'ap': float(ap[i]), 'name': names[c]}
+                          for i, c in enumerate(ap_class)}
+        }
+        with open(save_per_class_ap, 'w') as f:
+            json.dump(per_class_ap_data, f, indent=2)
+        print(f'Per-class AP saved to {save_per_class_ap}')
+
     # Print speeds
     t = tuple(x / seen * 1E3 for x in (t0, t1, t0 + t1)) + (imgsz, imgsz, batch_size)  # tuple
     if not training:
@@ -311,6 +324,7 @@ if __name__ == '__main__':
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--no-trace', action='store_true', help='don`t trace model')
     parser.add_argument('--v5-metric', action='store_true', help='assume maximum recall as 1.0 in AP calculation')
+    parser.add_argument('--save-per-class-ap', type=str, default=None, help='path to save per-class AP JSON (for RL augment search)')
     opt = parser.parse_args()
     opt.save_json |= opt.data.endswith('coco.yaml')
     opt.data = check_file(opt.data)  # check file
@@ -332,7 +346,8 @@ if __name__ == '__main__':
              save_hybrid=opt.save_hybrid,
              save_conf=opt.save_conf,
              trace=not opt.no_trace,
-             v5_metric=opt.v5_metric
+             v5_metric=opt.v5_metric,
+             save_per_class_ap=opt.save_per_class_ap
              )
 
     elif opt.task == 'speed':  # speed benchmarks
