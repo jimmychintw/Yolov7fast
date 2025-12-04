@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -157,13 +158,23 @@ def create_objective(args, head_classes: dict):
     target_head = args.head
     target_classes = head_classes[target_head]['classes']
     head_name = head_classes[target_head]['name']
+    total_trials = args.trials
+
+    # Progress tracking
+    progress = {
+        'start_time': time.time(),
+        'trial_times': [],
+        'best_score': 0.0
+    }
 
     print(f"\n{'='*60}")
     print(f"Optimizing Head {target_head}: {head_name}")
     print(f"Classes: {target_classes}")
+    print(f"Total trials: {total_trials}")
     print(f"{'='*60}\n")
 
     def objective(trial: optuna.Trial) -> float:
+        trial_start = time.time()
         trial_name = f"rl_head{target_head}_trial{trial.number}"
 
         # Create trial hyperparameters
@@ -172,7 +183,20 @@ def create_objective(args, head_classes: dict):
 
         hyp = create_trial_hyp(trial, args.base_hyp, trial_hyp_path)
 
-        print(f"\n--- Trial {trial.number} ---")
+        # Progress info
+        elapsed = time.time() - progress['start_time']
+        elapsed_str = f"{int(elapsed//3600)}h {int((elapsed%3600)//60)}m"
+        if progress['trial_times']:
+            avg_time = sum(progress['trial_times']) / len(progress['trial_times'])
+            remaining = avg_time * (total_trials - trial.number)
+            eta_str = f"{int(remaining//3600)}h {int((remaining%3600)//60)}m"
+        else:
+            eta_str = "calculating..."
+
+        print(f"\n{'='*60}")
+        print(f"[Trial {trial.number + 1}/{total_trials}] Head {target_head} | Elapsed: {elapsed_str} | ETA: {eta_str}")
+        print(f"Best so far: {progress['best_score']:.4f}")
+        print(f"{'='*60}")
         print(f"degrees={hyp['degrees']:.2f}, flipud={hyp['flipud']:.3f}, "
               f"fliplr={hyp['fliplr']:.3f}, shear={hyp['shear']:.2f}, mixup={hyp['mixup']:.3f}")
 
@@ -196,12 +220,22 @@ def create_objective(args, head_classes: dict):
         )
 
         if not success:
-            print(f"Trial {trial.number} failed")
+            print(f"Trial {trial.number + 1} FAILED")
+            progress['trial_times'].append(time.time() - trial_start)
             return 0.0
 
         # Calculate head-specific mAP
         head_map = calculate_head_map(per_class_ap_path, target_classes)
-        print(f"Trial {trial.number} Head {target_head} mAP@0.5: {head_map:.4f}")
+
+        # Update progress tracking
+        trial_time = time.time() - trial_start
+        progress['trial_times'].append(trial_time)
+        if head_map > progress['best_score']:
+            progress['best_score'] = head_map
+
+        print(f"\n>>> Trial {trial.number + 1}/{total_trials} COMPLETE | mAP@0.5: {head_map:.4f} | Time: {trial_time/60:.1f}min")
+        if head_map >= progress['best_score']:
+            print(f">>> NEW BEST! <<<")
 
         # Cleanup trial files and directory
         if os.path.exists(trial_hyp_path):
