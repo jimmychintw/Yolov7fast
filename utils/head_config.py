@@ -69,7 +69,7 @@ class HeadConfig:
         if self._full_head_override is not None:
             self.full_head = self._full_head_override
         else:
-            self.full_head = self.config.get('full_head', True)
+            self.full_head = self.config.get('full_head', False)
 
         # Head 分配設定
         if 'head_assignments' not in self.config:

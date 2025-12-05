@@ -37,7 +37,7 @@ class MultiHeadDetectAttention(MultiHeadDetect):
     - 減少跨類別的 False Positive
     """
 
-    def __init__(self, nc=80, anchors=(), ch=(), head_config=None, full_head=True):
+    def __init__(self, nc=80, anchors=(), ch=(), head_config=None, full_head=False):
         """
         初始化 MultiHeadDetectAttention
 

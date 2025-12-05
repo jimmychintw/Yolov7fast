@@ -35,7 +35,7 @@ class MultiHeadDetect(nn.Module):
     stride = None  # strides computed during build [8, 16, 32]
     export = False  # ONNX export mode
 
-    def __init__(self, nc=80, anchors=(), ch=(), head_config=None, full_head=True):
+    def __init__(self, nc=80, anchors=(), ch=(), head_config=None, full_head=False):
         """
         初始化 MultiHeadDetect
 
