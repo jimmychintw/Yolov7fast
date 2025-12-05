@@ -259,7 +259,7 @@ if __name__ == '__main__':
 
     # 測試用參數
     head_params_path = 'data/hyp.head_params.yaml'
-    head_config_path = 'data/coco_1b4h_geometry.yaml'
+    head_config_path = 'data/coco_320_1b4h_geometry.yaml'
 
     print("=== Stochastic Class-Aware Augmentation 測試 ===\n")
 
