@@ -37,7 +37,7 @@ class MultiHeadDetectAttention(MultiHeadDetect):
     - 減少跨類別的 False Positive
     """
 
-    def __init__(self, nc=80, anchors=(), ch=(), head_config=None):
+    def __init__(self, nc=80, anchors=(), ch=(), head_config=None, full_head=True):
         """
         初始化 MultiHeadDetectAttention
 
@@ -46,9 +46,10 @@ class MultiHeadDetectAttention(MultiHeadDetect):
             anchors: Anchor 設定 [[P3], [P4], [P5]]
             ch: 各層輸入通道數 [128, 256, 512]
             head_config: HeadConfig 實例
+            full_head: 是否使用 full-size head (輸出維度 = 5 + nc)
         """
         # 先調用父類初始化
-        super().__init__(nc, anchors, ch, head_config)
+        super().__init__(nc, anchors, ch, head_config, full_head)
 
         # 為每個 Head 建立獨立的 CBAM 模組組
         # ch = [128, 256, 512] 對應 P3, P4, P5

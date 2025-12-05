@@ -30,11 +30,12 @@ class MultiHeadDetect(nn.Module):
         head_nc (list): 各 Head 的類別數 [20, 20, 20, 20]
         nl (int): 檢測層數 (3: P3, P4, P5)
         na (int): 每層 anchor 數 (3)
+        full_head (bool): 是否使用 full-size head (輸出維度 = 5 + nc)
     """
     stride = None  # strides computed during build [8, 16, 32]
     export = False  # ONNX export mode
 
-    def __init__(self, nc=80, anchors=(), ch=(), head_config=None):
+    def __init__(self, nc=80, anchors=(), ch=(), head_config=None, full_head=True):
         """
         初始化 MultiHeadDetect
 
@@ -43,11 +44,15 @@ class MultiHeadDetect(nn.Module):
             anchors: Anchor 設定 [[P3], [P4], [P5]]
             ch: 各層輸入通道數 [128, 256, 512]
             head_config: HeadConfig 實例
+            full_head: 是否使用 full-size head
+                       - False (預設): 輸出維度 = 5 + head_nc (原始設計)
+                       - True: 輸出維度 = 5 + nc (與 1B1H 相同大小)
         """
         super(MultiHeadDetect, self).__init__()
 
         self.nc = nc  # 總類別數 (80)
         self.head_config = head_config
+        self.full_head = full_head
 
         if head_config is not None:
             self.num_heads = head_config.num_heads
@@ -58,8 +63,13 @@ class MultiHeadDetect(nn.Module):
             self.num_heads = 4
             self.head_nc = [nc // 4] * 4
 
-        # 每個 Head 的輸出維度 = 4(bbox) + 1(obj) + nc_i(cls)
-        self.head_no = [4 + 1 + nc_i for nc_i in self.head_nc]
+        # 每個 Head 的輸出維度
+        if full_head:
+            # Full-size: 所有 Head 輸出維度相同 = 5 + nc (85)
+            self.head_no = [5 + nc for _ in range(self.num_heads)]
+        else:
+            # 原始設計: 輸出維度 = 5 + head_nc
+            self.head_no = [5 + nc_i for nc_i in self.head_nc]
 
         self.nl = len(anchors)  # 檢測層數 (3: P3, P4, P5)
         self.na = len(anchors[0]) // 2  # 每層 anchor 數 (3)
@@ -184,17 +194,27 @@ class MultiHeadDetect(nn.Module):
 
                 # 分離 objectness 和 class scores
                 obj = y[..., 4:5]  # [bs, na, ny, nx, 1]
-                cls_local = y[..., 5:]  # [bs, na, ny, nx, head_nc]
+                cls_output = y[..., 5:]  # [bs, na, ny, nx, head_nc or nc]
 
-                # 建立 80 維的 cls tensor，初始化為 0
-                cls_global = torch.zeros(
-                    bs, self.na, ny, nx, self.nc,
-                    dtype=cls_local.dtype, device=cls_local.device
-                )
-
-                # 將 local class scores 映射到對應的 global positions
-                for local_id, global_id in enumerate(head_classes):
-                    cls_global[..., global_id] = cls_local[..., local_id]
+                if self.full_head:
+                    # Full-head 模式: 輸出已經是 80 維，直接使用
+                    # 但需要 mask 掉非該 Head 負責的類別
+                    cls_global = torch.zeros(
+                        bs, self.na, ny, nx, self.nc,
+                        dtype=cls_output.dtype, device=cls_output.device
+                    )
+                    # 只保留該 Head 負責的類別
+                    for local_id, global_id in enumerate(head_classes):
+                        cls_global[..., global_id] = cls_output[..., global_id]
+                else:
+                    # 原始模式: 輸出是 head_nc 維，需要映射到 80 維
+                    cls_global = torch.zeros(
+                        bs, self.na, ny, nx, self.nc,
+                        dtype=cls_output.dtype, device=cls_output.device
+                    )
+                    # 將 local class scores 映射到對應的 global positions
+                    for local_id, global_id in enumerate(head_classes):
+                        cls_global[..., global_id] = cls_output[..., local_id]
 
                 # 合併: [bs, na, ny, nx, 85]
                 pred = torch.cat([xy, wh, obj, cls_global], dim=-1)
@@ -225,12 +245,22 @@ class MultiHeadDetect(nn.Module):
         """
         for head_id, head_layers in enumerate(self.heads):
             head_nc = self.head_nc[head_id]
+            # full_head 模式下，輸出維度是 nc，但只初始化該 Head 負責的類別
+            output_nc = self.nc if self.full_head else head_nc
+
             for layer, s in zip(head_layers, self.stride):
                 b = layer.bias.view(self.na, -1)  # [na, no]
                 # objectness 偏置: 假設每張圖平均 8 個物體
                 b.data[:, 4] += math.log(8 / (640 / s) ** 2)
                 # class 偏置
-                b.data[:, 5:5+head_nc] += math.log(0.6 / (head_nc - 0.99)) if cf is None else torch.log(cf / cf.sum())
+                if self.full_head:
+                    # Full-head 模式: 只初始化該 Head 負責的類別
+                    head_classes = self.head_config.get_head_classes(head_id) if self.head_config else []
+                    for global_id in head_classes:
+                        b.data[:, 5 + global_id] += math.log(0.6 / (head_nc - 0.99)) if cf is None else torch.log(cf / cf.sum())
+                else:
+                    # 原始模式
+                    b.data[:, 5:5+head_nc] += math.log(0.6 / (head_nc - 0.99)) if cf is None else torch.log(cf / cf.sum())
                 layer.bias = nn.Parameter(b.view(-1), requires_grad=True)
 
 

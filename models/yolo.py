@@ -810,9 +810,10 @@ def parse_model(d, ch, head_config=None):  # model_dict, input_channels(3), head
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
-            # 為 MultiHeadDetect / MultiHeadDetectAttention 傳入 head_config
+            # 為 MultiHeadDetect / MultiHeadDetectAttention 傳入 head_config 和 full_head
             if m in [MultiHeadDetect, MultiHeadDetectAttention] and head_config is not None:
                 args.append(head_config)  # args = [nc, anchors, ch, head_config]
+                args.append(head_config.full_head)  # args = [nc, anchors, ch, head_config, full_head]
         elif m is ReOrg:
             c2 = ch[f] * 4
         elif m is Contract:

@@ -71,6 +71,15 @@ class ComputeLossRouter:
         # 各 Head 的類別數
         self.head_nc = det.head_nc  # [20, 20, 20, 20]
 
+        # 檢查是否使用 full_head 模式
+        self.full_head = getattr(det, 'full_head', False)
+
+        # 建立各 Head 負責的類別列表 (用於 full_head 模式)
+        self.head_classes = []
+        for head_id in range(self.num_heads):
+            classes = head_config.get_head_classes(head_id)
+            self.head_classes.append(classes)
+
         # 各層的 balance 權重 (P3, P4, P5)
         self.balance = {3: [4.0, 1.0, 0.4]}.get(self.nl, [4.0, 1.0, 0.25, 0.06, 0.02])
 
@@ -223,10 +232,24 @@ class ComputeLossRouter:
 
                 # Classification Loss
                 if head_nc > 1:
-                    # 建立 one-hot target with label smoothing
-                    t = torch.full_like(ps[:, 5:], self.cn, device=device)  # [n, head_nc]
-                    t[range(n), tcls[i]] = self.cp
-                    lcls += self.BCEcls(ps[:, 5:], t)
+                    if self.full_head:
+                        # Full-head 模式: 輸出是 80 維，只計算該 Head 負責的類別
+                        head_classes = self.head_classes[head_id]
+                        cls_pred = ps[:, 5:]  # [n, 80]
+
+                        # 只取該 Head 負責的類別的預測
+                        cls_pred_head = cls_pred[:, head_classes]  # [n, head_nc]
+
+                        # 建立 one-hot target with label smoothing
+                        t = torch.full_like(cls_pred_head, self.cn, device=device)  # [n, head_nc]
+                        t[range(n), tcls[i]] = self.cp
+                        lcls += self.BCEcls(cls_pred_head, t)
+                    else:
+                        # 原始模式: 輸出是 head_nc 維
+                        # 建立 one-hot target with label smoothing
+                        t = torch.full_like(ps[:, 5:], self.cn, device=device)  # [n, head_nc]
+                        t[range(n), tcls[i]] = self.cp
+                        lcls += self.BCEcls(ps[:, 5:], t)
 
             # Objectness Loss (包含負樣本 - 重要！)
             # 即使此層沒有正樣本，也要計算 obj loss（全是負樣本）

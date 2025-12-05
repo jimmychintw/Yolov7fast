@@ -29,20 +29,25 @@ class HeadConfig:
         local_id_map (dict): global_class_id → local_class_id 映射
         weights (list): 每個 Head 的 Loss 權重
         head_classes (list): 每個 Head 負責的類別列表
+        full_head (bool): 是否使用 full-size head (輸出維度 = 5 + nc)
     """
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, full_head: bool = None):
         """
         初始化 HeadConfig
 
         Args:
             config_path: YAML 設定檔路徑
+            full_head: 是否使用 full-size head
+                       - None: 從 YAML 讀取 (預設 False)
+                       - True/False: 覆蓋 YAML 設定
 
         Raises:
             FileNotFoundError: 設定檔不存在
             ValueError: 設定檔格式錯誤或類別分配有誤
         """
         self.config_path = Path(config_path)
+        self._full_head_override = full_head  # 儲存覆蓋值
         self._load_config()
         self._build_mappings()
         self._validate()
@@ -59,6 +64,12 @@ class HeadConfig:
         self.nc = self.config.get('nc', 80)  # 總類別數
         self.num_heads = self.config.get('heads', 4)  # Head 數量
         self.grouping = self.config.get('grouping', 'standard')  # 分類方式
+
+        # full_head 設定：優先使用覆蓋值，否則從 YAML 讀取
+        if self._full_head_override is not None:
+            self.full_head = self._full_head_override
+        else:
+            self.full_head = self.config.get('full_head', True)
 
         # Head 分配設定
         if 'head_assignments' not in self.config:

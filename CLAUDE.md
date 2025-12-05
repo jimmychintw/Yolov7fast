@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 5. **獨立可測試**：每個模組都必須可以單獨執行和測試
 6. **禁止重新寫程式**：所有程式都必須基於現有內容進行優化，不得重新編寫
 7. **暫存檔案放 temp/**：輔助程式、臨時腳本、產生的暫存檔案等非專案主要部分，請放在 `temp/` 目錄下
+8. **temp 目錄程式直接執行**：在 `temp/` 目錄中寫好的程式（繪圖、分析等）直接執行，不需詢問使用者
 
 ## Project Overview
 
