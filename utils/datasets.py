@@ -63,7 +63,8 @@ def exif_size(img):
 
 
 def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
-                      rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix=''):
+                      rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='',
+                      class_aware_aug=None):  # Class-Aware Augmentation 模組 (可選)
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
@@ -75,7 +76,8 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
                                       stride=int(stride),
                                       pad=pad,
                                       image_weights=image_weights,
-                                      prefix=prefix)
+                                      prefix=prefix,
+                                      class_aware_aug=class_aware_aug)  # Stochastic Class-Aware Augmentation
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
@@ -352,7 +354,8 @@ def img2label_paths(img_paths):
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix=''):
+                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='',
+                 class_aware_aug=None):  # Class-Aware Augmentation 模組 (可選)
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -361,7 +364,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.mosaic = self.augment and not self.rect  # load 4 images at a time into a mosaic (only during training)
         self.mosaic_border = [-img_size // 2, -img_size // 2]
         self.stride = stride
-        self.path = path        
+        self.path = path
+        self.class_aware_aug = class_aware_aug  # Stochastic Class-Aware Augmentation
         #self.albumentations = Albumentations() if augment else None
 
         try:
@@ -709,6 +713,7 @@ def load_mosaic(self, index):
     # loads images in a 4-mosaic
 
     labels4, segments4 = [], []
+    labels_raw = []  # 用於 Class-Aware Augmentation 的原始標籤
     s = self.img_size
     yc, xc = [int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border]  # mosaic center x, y
     indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
@@ -737,6 +742,7 @@ def load_mosaic(self, index):
 
         # Labels
         labels, segments = self.labels[index].copy(), self.segments[index].copy()
+        labels_raw.append(self.labels[index])  # 保存原始標籤用於 Class-Aware Augmentation
         if labels.size:
             labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
             segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
@@ -753,11 +759,21 @@ def load_mosaic(self, index):
     #img4, labels4, segments4 = remove_background(img4, labels4, segments4)
     #sample_segments(img4, labels4, segments4, probability=self.hyp['copy_paste'])
     img4, labels4, segments4 = copy_paste(img4, labels4, segments4, probability=self.hyp['copy_paste'])
+
+    # Class-Aware Augmentation: 根據物體分布選擇增強策略
+    if self.class_aware_aug is not None:
+        aug_params, _ = self.class_aware_aug.select_policy_for_mosaic(labels_raw)
+        degrees = aug_params['degrees']
+        shear = aug_params['shear']
+    else:
+        degrees = self.hyp['degrees']
+        shear = self.hyp['shear']
+
     img4, labels4 = random_perspective(img4, labels4, segments4,
-                                       degrees=self.hyp['degrees'],
+                                       degrees=degrees,
                                        translate=self.hyp['translate'],
                                        scale=self.hyp['scale'],
-                                       shear=self.hyp['shear'],
+                                       shear=shear,
                                        perspective=self.hyp['perspective'],
                                        border=self.mosaic_border)  # border to remove
 

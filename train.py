@@ -34,6 +34,7 @@ from utils.loss import ComputeLoss, ComputeLossOTA
 from utils.loss_router import ComputeLossRouter
 from utils.head_config import HeadConfig
 from utils.weight_transfer import load_transfer_weights
+from utils.class_aware_augment import StochasticClassAwareAugmentation
 from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
@@ -266,11 +267,25 @@ def train(hyp, opt, device, tb_writer=None):
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         logger.info('Using SyncBatchNorm()')
 
+    # Class-Aware Augmentation (可選功能)
+    class_aware_aug = None
+    if hasattr(opt, 'class_aware_aug') and opt.class_aware_aug:
+        if model_head_config is None:
+            logger.warning('--class-aware-aug requires --head-config, falling back to standard augmentation')
+        else:
+            head_params_path = getattr(opt, 'head_params', 'data/hyp.head_params.yaml')
+            class_aware_aug = StochasticClassAwareAugmentation(
+                head_params_path=head_params_path,
+                head_config=model_head_config
+            )
+            logger.info(f'Enabled Stochastic Class-Aware Augmentation with {head_params_path}')
+
     # Trainloader
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size, gs, opt,
                                             hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
                                             world_size=opt.world_size, workers=opt.workers,
-                                            image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '))
+                                            image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '),
+                                            class_aware_aug=class_aware_aug)
     mlc = np.concatenate(dataset.labels, 0)[:, 0].max()  # max label class
     nb = len(dataloader)  # number of batches
     assert mlc < nc, 'Label class %g exceeds nc=%g in %s. Possible class labels are 0-%g' % (mlc, nc, opt.data, nc - 1)
@@ -609,6 +624,8 @@ if __name__ == '__main__':
     parser.add_argument('--head-config', type=str, default='', help='Path to head configuration YAML file')
     parser.add_argument('--transfer-weights', action='store_true', help='Transfer weights from 1B1H to 1B4H (load Backbone+Neck, discard Head)')
     parser.add_argument('--auto-lr', action='store_true', help='Enable Auto LR Scaling: lr0 *= sqrt(batch_size/64) when batch > 64')
+    parser.add_argument('--class-aware-aug', action='store_true', help='Enable Stochastic Class-Aware Augmentation (requires --head-params)')
+    parser.add_argument('--head-params', type=str, default='data/hyp.head_params.yaml', help='Path to head augmentation params YAML')
     opt = parser.parse_args()
 
     # Set DDP variables
