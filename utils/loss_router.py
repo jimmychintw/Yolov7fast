@@ -44,6 +44,9 @@ class ComputeLossRouter:
         h = model.hyp
         self.hyp = h
 
+        # 策略 A：是否忽略其他 Head 的物體
+        self.ignore_other_heads = h.get('ignore_other_heads', False)
+
         # BCE loss with label smoothing
         self.cp, self.cn = smooth_BCE(eps=h.get('label_smoothing', 0.0))
 
@@ -128,7 +131,7 @@ class ComputeLossRouter:
 
             # 計算此 Head 的 Loss
             lbox, lobj, lcls = self._compute_head_loss(
-                head_preds, head_targets, head_id, head_nc
+                head_preds, head_targets, head_id, head_nc, all_targets=targets
             )
 
             # 加權累加
@@ -182,7 +185,7 @@ class ComputeLossRouter:
 
         return head_targets
 
-    def _compute_head_loss(self, head_preds, targets, head_id, head_nc):
+    def _compute_head_loss(self, head_preds, targets, head_id, head_nc, all_targets=None):
         """
         計算單一 Head 的 Loss
 
@@ -193,6 +196,7 @@ class ComputeLossRouter:
             targets: 已篩選並轉換為 local_id 的 targets [M, 6]
             head_id: Head ID
             head_nc: 此 Head 的類別數 (20)
+            all_targets: 完整的 targets（未篩選，用於策略 A）
 
         Returns:
             lbox, lobj, lcls: Box/Obj/Cls Loss (未乘以超參數權重)
@@ -253,7 +257,15 @@ class ComputeLossRouter:
 
             # Objectness Loss (包含負樣本 - 重要！)
             # 即使此層沒有正樣本，也要計算 obj loss（全是負樣本）
-            obji = self.BCEobj(pi[..., 4], tobj)
+            if self.ignore_other_heads and all_targets is not None:
+                # 策略 A：忽略其他 Head 的物體位置
+                ignore_mask = self._get_ignore_mask(i, head_preds[i], head_id, all_targets)
+                # 只計算「正樣本」和「真背景」的 loss，忽略「其他 Head 的物體」
+                valid_positions = ~ignore_mask  # [bs, na, ny, nx]
+                obji = self.BCEobj(pi[..., 4][valid_positions], tobj[valid_positions])
+            else:
+                # 原有行為：計算所有位置的 obj loss
+                obji = self.BCEobj(pi[..., 4], tobj)
             lobj += obji * self.balance[i]
 
         return lbox, lobj, lcls
@@ -343,6 +355,67 @@ class ComputeLossRouter:
                 tcls.append(torch.zeros(0, dtype=torch.long, device=targets.device))
 
         return tcls, tbox, indices, anch
+
+    def _get_ignore_mask(self, layer_idx, pred, head_id, all_targets):
+        """
+        策略 A：找出當前 Head 應該 Ignore 的位置（其他 Head 的獵物）
+
+        Args:
+            layer_idx: 檢測層 index (0=P3, 1=P4, 2=P5)
+            pred: 當前層的預測 [bs, na, ny, nx, no]
+            head_id: 當前 Head ID
+            all_targets: 所有 targets [N, 6] (image_idx, global_class, x, y, w, h)
+
+        Returns:
+            ignore_mask: [bs, na, ny, nx] bool tensor
+                         True = 該位置有其他 Head 的物體，應 ignore
+                         False = 該位置可以計算 loss
+        """
+        device = pred.device
+        bs, na, ny, nx = pred.shape[:4]
+
+        # 初始化 ignore_mask，預設全為 False（可以計算 loss）
+        ignore_mask = torch.zeros(bs, na, ny, nx, dtype=torch.bool, device=device)
+
+        if all_targets.shape[0] == 0:
+            return ignore_mask
+
+        # 1. 篩選出「不屬於當前 Head」的 targets
+        class_ids = all_targets[:, 1].long()
+        target_heads = self.class_to_head[class_ids]
+        other_head_mask = (target_heads != head_id)
+
+        if not other_head_mask.any():
+            # 沒有其他 Head 的物體
+            return ignore_mask
+
+        other_targets = all_targets[other_head_mask]  # [M, 6]
+
+        # 2. 將其他 Head 的 targets 分配到 grid 位置
+        # 使用與 _build_targets 類似的邏輯，但只需要位置信息
+
+        # 計算 gain（grid size）
+        gain = torch.tensor([1, 1, nx, ny, nx, ny], device=device, dtype=torch.float)
+        t = other_targets * gain  # [M, 6], 縮放到 grid 座標
+
+        # 對於每個 target，找到對應的 grid cell
+        if t.shape[0] > 0:
+            # 取得 grid 座標
+            b = t[:, 0].long()  # image index
+            gxy = t[:, 2:4]     # grid xy
+            gwh = t[:, 4:6]     # grid wh
+
+            # 計算中心點所在的 grid cell
+            gij = gxy.long()
+            gi, gj = gij[:, 0].clamp_(0, nx - 1), gij[:, 1].clamp_(0, ny - 1)
+
+            # 對於每個 anchor，標記該位置為 ignore
+            # 這裡簡化處理：所有 anchor 都標記（保守策略）
+            for anchor_id in range(na):
+                # 標記這些位置為 True（需要 ignore）
+                ignore_mask[b, anchor_id, gj, gi] = True
+
+        return ignore_mask
 
 
 # 單獨執行時的測試

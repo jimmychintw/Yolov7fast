@@ -323,6 +323,7 @@ def train(hyp, opt, device, tb_writer=None):
     hyp['cls'] *= nc / 80. * 3. / nl  # scale to classes and layers
     hyp['obj'] *= (imgsz / 640) ** 2 * 3. / nl  # scale to image size and layers
     hyp['label_smoothing'] = opt.label_smoothing
+    hyp['ignore_other_heads'] = opt.ignore_other_heads  # Strategy A: ignore other heads in obj loss
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.gr = 1.0  # iou loss ratio (obj_loss = 1.0 or iou)
@@ -626,6 +627,7 @@ if __name__ == '__main__':
     parser.add_argument('--auto-lr', action='store_true', help='Enable Auto LR Scaling: lr0 *= sqrt(batch_size/64) when batch > 64')
     parser.add_argument('--class-aware-aug', action='store_true', help='Enable Stochastic Class-Aware Augmentation (requires --head-params)')
     parser.add_argument('--head-params', type=str, default='data/hyp.head_params.yaml', help='Path to head augmentation params YAML')
+    parser.add_argument('--ignore-other-heads', action='store_true', help='Strategy A: Ignore other heads objects in objectness loss (multihead only)')
     opt = parser.parse_args()
 
     # Set DDP variables

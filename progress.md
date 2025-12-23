@@ -1,6 +1,67 @@
 # 專案進度報告
 
-## 目前狀態：Freeze 策略比較實驗 + Gradual Unfreeze 進行中 🔄
+## 目前狀態：策略 A 實作完成，準備對比實驗 ⭐
+
+---
+
+## 策略 A（停火協議）實作完成 (2025-12-23)
+
+### 功能說明
+
+**核心概念**：「那是別人的獵物，我不要開槍」
+- 當一個 Head 看到不屬於自己的物體時，**不當作負樣本訓練**
+- 消除梯度衝突，提升 Backbone 學習效率
+- 目標：讓 1B4H 突破 plateau，超越 1B1H (0.4353)
+
+### 實作狀態
+
+✅ train.py 新增 `--ignore-other-heads` 參數
+✅ ComputeLossRouter 實作 ignore_mask 機制
+✅ 單元測試全部通過
+✅ 向後相容（Default = False）
+
+### 對比實驗指令
+
+**實驗組（策略 A）**：
+```bash
+python train.py --img-size 320 320 --batch-size 64 --epochs 500 \
+    --weights runs/train/20251201_1b1h_500ep_bs128/weights/best.pt \
+    --transfer-weights --freeze 50 \
+    --data data/coco320.yaml --cfg cfg/training/yolov7-tiny-1b4h.yaml \
+    --hyp data/hyp.scratch.tiny.noota.yaml --device 0 --workers 16 \
+    --project runs/train --name 1b4h_strategy_a_500ep \
+    --noautoanchor --cache-images --heads 4 \
+    --head-config data/coco_320_1b4h_anticonfusion.yaml \
+    --ignore-other-heads
+```
+
+**對照組（原有模式）**：
+```bash
+python train.py --img-size 320 320 --batch-size 64 --epochs 500 \
+    --weights runs/train/20251201_1b1h_500ep_bs128/weights/best.pt \
+    --transfer-weights --freeze 50 \
+    --data data/coco320.yaml --cfg cfg/training/yolov7-tiny-1b4h.yaml \
+    --hyp data/hyp.scratch.tiny.noota.yaml --device 0 --workers 16 \
+    --project runs/train --name 1b4h_original_500ep \
+    --noautoanchor --cache-images --heads 4 \
+    --head-config data/coco_320_1b4h_anticonfusion.yaml
+```
+
+**差異**：只有 `--ignore-other-heads` 一個參數
+
+### 預期結果
+
+| 訓練 | 預期 mAP@0.5 | 說明 |
+|------|-------------|------|
+| 1B1H Baseline | 0.4353 | 當前冠軍 |
+| Hybrid (原有) | 0.4320 | 最佳 1B4H，plateau |
+| **Strategy A** | **0.44+** | 目標：突破 plateau |
+
+### 相關檔案
+
+- 實作：`utils/loss_router.py`, `train.py`
+- 測試：`temp/test_strategy_a.py`
+- 說明：`temp/strategy_a_usage.md`
 
 ---
 
@@ -72,26 +133,15 @@
 
 ---
 
-## 伺服器訓練狀態 (2025-12-04)
+## 伺服器訓練狀態 (2025-12-23)
 
-### 7950 (ssh -p 21024 root@116.122.206.233)
-| 訓練 | 狀態 |
-|------|------|
-| AntiConfusion 500ep | ✅ 完成，已同步 |
-
-### 9950 (ssh -p 42715 root@174.93.145.110)
+### 285 (ssh -p 45897 root@173.239.88.241 -L 8080:localhost:8080)
 | 訓練 | 進度 | mAP@0.5 | 狀態 |
 |------|------|---------|------|
-| **Unfreeze f74→f50 200ep** | 0/200 | - | 🆕 剛啟動 |
-| freeze74 200ep | 200/200 | 0.4251 | ✅ 完成 |
-| Geometry 500ep | 500/500 | 0.4276 | ✅ 完成 |
-| Hybrid 500ep | 500/500 | 0.4320 | ✅ 已同步 |
-| 1B1H 500ep | 500/500 | 0.4353 | ✅ 已同步 |
+| - | - | - | ⏳ 待執行策略 A 對比實驗 |
 
-### 99502 (ssh -p 43422 root@113.150.232.222)
-| 訓練 | 進度 | mAP@0.5 | 狀態 |
-|------|------|---------|------|
-| **freeze29 200ep** | 42/200 | 0.3959 | 🔄 進行中 |
+### 已淘汰伺服器
+- 7950, 9950, 99502（所有訓練已完成並同步）
 
 ---
 
@@ -287,7 +337,8 @@ python train.py --img-size 320 320 --batch-size 64 --epochs 500 \
 ## vast.ai 遠端環境
 
 ```
-SSH: ssh -p 42715 root@174.93.145.110
+SSH: ssh -p 45897 root@173.239.88.241 -L 8080:localhost:8080
+主機名: 285
 GPU: RTX 5090 (32GB VRAM)
 PyTorch: 2.8.0+cu128 (支援 Blackwell sm_120)
 venv: /workspace/Yolov7fast/venv
