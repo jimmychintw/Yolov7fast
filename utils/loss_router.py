@@ -409,11 +409,17 @@ class ComputeLossRouter:
             gij = gxy.long()
             gi, gj = gij[:, 0].clamp_(0, nx - 1), gij[:, 1].clamp_(0, ny - 1)
 
-            # 對於每個 anchor，標記該位置為 ignore
+            # 對於每個 anchor，標記該位置為 ignore（向量化版本）
             # 這裡簡化處理：所有 anchor 都標記（保守策略）
-            for anchor_id in range(na):
-                # 標記這些位置為 True（需要 ignore）
-                ignore_mask[b, anchor_id, gj, gi] = True
+            # 使用 broadcasting 一次性設定所有 anchor（避免 Python loop）
+            num_targets = len(b)
+            anchor_indices = torch.arange(na, device=device).unsqueeze(0).expand(num_targets, -1)  # [M, na]
+            b_expanded = b.unsqueeze(1).expand(-1, na)  # [M, na]
+            gj_expanded = gj.unsqueeze(1).expand(-1, na)  # [M, na]
+            gi_expanded = gi.unsqueeze(1).expand(-1, na)  # [M, na]
+
+            # 一次性標記所有位置（GPU 平行化）
+            ignore_mask[b_expanded, anchor_indices, gj_expanded, gi_expanded] = True
 
         return ignore_mask
 
