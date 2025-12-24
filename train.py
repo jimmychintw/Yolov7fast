@@ -38,6 +38,11 @@ from utils.class_aware_augment import StochasticClassAwareAugmentation
 from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, is_parallel
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
+from utils.freeze_by_index import apply_stage1_freeze, apply_stage2_freeze, apply_stage2_bn_phase
+from utils.optimizer_groups import (
+    build_stage1_param_groups, build_stage2_param_groups,
+    get_warmup_scale, print_stage_summary
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,13 +126,24 @@ def train(hyp, opt, device, tb_writer=None):
     train_path = data_dict['train']
     test_path = data_dict['val']
 
-    # Freeze
-    freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # parameter names to freeze (full or partial)
-    for k, v in model.named_parameters():
-        v.requires_grad = True  # train all layers
-        if any(x in k for x in freeze):
-            print('freezing %s' % k)
-            v.requires_grad = False
+    # Freeze (original logic, only when NOT in stage mode)
+    stage_mode = hasattr(opt, 'stage') and opt.stage in ['stage1_neck_tune', 'stage2_late_backbone_tune']
+
+    if not stage_mode:
+        # Original freeze behavior
+        freeze = [f'model.{x}.' for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # parameter names to freeze (full or partial)
+        for k, v in model.named_parameters():
+            v.requires_grad = True  # train all layers
+            if any(x in k for x in freeze):
+                print('freezing %s' % k)
+                v.requires_grad = False
+    else:
+        # Stage mode: apply stage-specific freeze
+        logger.info(f"\n[Stage Mode] Applying {opt.stage} freeze configuration")
+        if opt.stage == 'stage1_neck_tune':
+            apply_stage1_freeze(model, verbose=False)
+        elif opt.stage == 'stage2_late_backbone_tune':
+            apply_stage2_freeze(model, verbose=False)
 
     # Optimizer
     nbs = 64  # nominal batch size
@@ -135,80 +151,140 @@ def train(hyp, opt, device, tb_writer=None):
     hyp['weight_decay'] *= total_batch_size * accumulate / nbs  # scale weight_decay
     logger.info(f"Scaled weight_decay = {hyp['weight_decay']}")
 
-    pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
-    for k, v in model.named_modules():
-        if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
-            pg2.append(v.bias)  # biases
-        if isinstance(v, nn.BatchNorm2d):
-            pg0.append(v.weight)  # no decay
-        elif hasattr(v, 'weight') and isinstance(v.weight, nn.Parameter):
-            pg1.append(v.weight)  # apply decay
-        if hasattr(v, 'im'):
-            if hasattr(v.im, 'implicit'):           
-                pg0.append(v.im.implicit)
-            else:
-                for iv in v.im:
-                    pg0.append(iv.implicit)
-        if hasattr(v, 'imc'):
-            if hasattr(v.imc, 'implicit'):           
-                pg0.append(v.imc.implicit)
-            else:
-                for iv in v.imc:
-                    pg0.append(iv.implicit)
-        if hasattr(v, 'imb'):
-            if hasattr(v.imb, 'implicit'):           
-                pg0.append(v.imb.implicit)
-            else:
-                for iv in v.imb:
-                    pg0.append(iv.implicit)
-        if hasattr(v, 'imo'):
-            if hasattr(v.imo, 'implicit'):           
-                pg0.append(v.imo.implicit)
-            else:
-                for iv in v.imo:
-                    pg0.append(iv.implicit)
-        if hasattr(v, 'ia'):
-            if hasattr(v.ia, 'implicit'):           
-                pg0.append(v.ia.implicit)
-            else:
-                for iv in v.ia:
-                    pg0.append(iv.implicit)
-        if hasattr(v, 'attn'):
-            if hasattr(v.attn, 'logit_scale'):   
-                pg0.append(v.attn.logit_scale)
-            if hasattr(v.attn, 'q_bias'):   
-                pg0.append(v.attn.q_bias)
-            if hasattr(v.attn, 'v_bias'):  
-                pg0.append(v.attn.v_bias)
-            if hasattr(v.attn, 'relative_position_bias_table'):  
-                pg0.append(v.attn.relative_position_bias_table)
-        if hasattr(v, 'rbr_dense'):
-            if hasattr(v.rbr_dense, 'weight_rbr_origin'):  
-                pg0.append(v.rbr_dense.weight_rbr_origin)
-            if hasattr(v.rbr_dense, 'weight_rbr_avg_conv'): 
-                pg0.append(v.rbr_dense.weight_rbr_avg_conv)
-            if hasattr(v.rbr_dense, 'weight_rbr_pfir_conv'):  
-                pg0.append(v.rbr_dense.weight_rbr_pfir_conv)
-            if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_idconv1'): 
-                pg0.append(v.rbr_dense.weight_rbr_1x1_kxk_idconv1)
-            if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_conv2'):   
-                pg0.append(v.rbr_dense.weight_rbr_1x1_kxk_conv2)
-            if hasattr(v.rbr_dense, 'weight_rbr_gconv_dw'):   
-                pg0.append(v.rbr_dense.weight_rbr_gconv_dw)
-            if hasattr(v.rbr_dense, 'weight_rbr_gconv_pw'):   
-                pg0.append(v.rbr_dense.weight_rbr_gconv_pw)
-            if hasattr(v.rbr_dense, 'vector'):   
-                pg0.append(v.rbr_dense.vector)
-
-    if opt.adam:
-        optimizer = optim.Adam(pg0, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))  # adjust beta1 to momentum
+    # Stage mode: determine warmup restart epochs
+    if stage_mode:
+        if opt.warmup_restart_epochs < 0:
+            # Auto: Stage1=5, Stage2=10
+            stage_warmup_epochs = 5 if opt.stage == 'stage1_neck_tune' else 10
+        else:
+            stage_warmup_epochs = opt.warmup_restart_epochs
+        logger.info(f"[Stage Mode] Warmup restart epochs: {stage_warmup_epochs}")
     else:
-        optimizer = optim.SGD(pg0, lr=hyp['lr0'], momentum=hyp['momentum'], nesterov=True)
+        stage_warmup_epochs = 0
 
-    optimizer.add_param_group({'params': pg1, 'weight_decay': hyp['weight_decay']})  # add pg1 with weight_decay
-    optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
-    logger.info('Optimizer groups: %g .bias, %g conv.weight, %g other' % (len(pg2), len(pg1), len(pg0)))
-    del pg0, pg1, pg2
+    # Build optimizer param groups
+    if stage_mode:
+        # Stage mode: use scope-based param groups
+        if opt.stage == 'stage1_neck_tune':
+            stage_param_groups = build_stage1_param_groups(
+                model=model,
+                lr0=hyp['lr0'],
+                weight_decay=hyp['weight_decay'],
+                mult_head=opt.lr_mult_head,
+                mult_neck=opt.lr_mult_neck
+            )
+            # Print stage summary
+            if opt.print_stage_summary:
+                print_stage_summary(
+                    stage_name='Stage1: Neck Tune',
+                    trainable_scopes=['HEAD', 'NECK'],
+                    frozen_scopes=['BACKBONE_EARLY', 'BACKBONE_LATE'],
+                    param_groups=stage_param_groups,
+                    warmup_epochs=stage_warmup_epochs
+                )
+        elif opt.stage == 'stage2_late_backbone_tune':
+            stage_param_groups = build_stage2_param_groups(
+                model=model,
+                lr0=hyp['lr0'],
+                weight_decay=hyp['weight_decay'],
+                mult_head=opt.lr_mult_head,
+                mult_neck=opt.lr_mult_neck,
+                mult_backbone=opt.lr_mult_backbone
+            )
+            # Print stage summary
+            if opt.print_stage_summary:
+                print_stage_summary(
+                    stage_name='Stage2: Late Backbone Tune',
+                    trainable_scopes=['HEAD', 'NECK', 'BACKBONE_LATE'],
+                    frozen_scopes=['BACKBONE_EARLY'],
+                    param_groups=stage_param_groups,
+                    warmup_epochs=stage_warmup_epochs
+                )
+
+        # Create optimizer with stage param groups
+        if opt.adam:
+            optimizer = optim.Adam(stage_param_groups, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))
+        else:
+            optimizer = optim.SGD(stage_param_groups, lr=hyp['lr0'], momentum=hyp['momentum'], nesterov=True)
+
+        logger.info(f'[Stage Mode] Optimizer created with {len(stage_param_groups)} param groups')
+
+    else:
+        # Original optimizer logic
+        pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
+        for k, v in model.named_modules():
+            if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
+                pg2.append(v.bias)  # biases
+            if isinstance(v, nn.BatchNorm2d):
+                pg0.append(v.weight)  # no decay
+            elif hasattr(v, 'weight') and isinstance(v.weight, nn.Parameter):
+                pg1.append(v.weight)  # apply decay
+            if hasattr(v, 'im'):
+                if hasattr(v.im, 'implicit'):
+                    pg0.append(v.im.implicit)
+                else:
+                    for iv in v.im:
+                        pg0.append(iv.implicit)
+            if hasattr(v, 'imc'):
+                if hasattr(v.imc, 'implicit'):
+                    pg0.append(v.imc.implicit)
+                else:
+                    for iv in v.imc:
+                        pg0.append(iv.implicit)
+            if hasattr(v, 'imb'):
+                if hasattr(v.imb, 'implicit'):
+                    pg0.append(v.imb.implicit)
+                else:
+                    for iv in v.imb:
+                        pg0.append(iv.implicit)
+            if hasattr(v, 'imo'):
+                if hasattr(v.imo, 'implicit'):
+                    pg0.append(v.imo.implicit)
+                else:
+                    for iv in v.imo:
+                        pg0.append(iv.implicit)
+            if hasattr(v, 'ia'):
+                if hasattr(v.ia, 'implicit'):
+                    pg0.append(v.ia.implicit)
+                else:
+                    for iv in v.ia:
+                        pg0.append(iv.implicit)
+            if hasattr(v, 'attn'):
+                if hasattr(v.attn, 'logit_scale'):
+                    pg0.append(v.attn.logit_scale)
+                if hasattr(v.attn, 'q_bias'):
+                    pg0.append(v.attn.q_bias)
+                if hasattr(v.attn, 'v_bias'):
+                    pg0.append(v.attn.v_bias)
+                if hasattr(v.attn, 'relative_position_bias_table'):
+                    pg0.append(v.attn.relative_position_bias_table)
+            if hasattr(v, 'rbr_dense'):
+                if hasattr(v.rbr_dense, 'weight_rbr_origin'):
+                    pg0.append(v.rbr_dense.weight_rbr_origin)
+                if hasattr(v.rbr_dense, 'weight_rbr_avg_conv'):
+                    pg0.append(v.rbr_dense.weight_rbr_avg_conv)
+                if hasattr(v.rbr_dense, 'weight_rbr_pfir_conv'):
+                    pg0.append(v.rbr_dense.weight_rbr_pfir_conv)
+                if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_idconv1'):
+                    pg0.append(v.rbr_dense.weight_rbr_1x1_kxk_idconv1)
+                if hasattr(v.rbr_dense, 'weight_rbr_1x1_kxk_conv2'):
+                    pg0.append(v.rbr_dense.weight_rbr_1x1_kxk_conv2)
+                if hasattr(v.rbr_dense, 'weight_rbr_gconv_dw'):
+                    pg0.append(v.rbr_dense.weight_rbr_gconv_dw)
+                if hasattr(v.rbr_dense, 'weight_rbr_gconv_pw'):
+                    pg0.append(v.rbr_dense.weight_rbr_gconv_pw)
+                if hasattr(v.rbr_dense, 'vector'):
+                    pg0.append(v.rbr_dense.vector)
+
+        if opt.adam:
+            optimizer = optim.Adam(pg0, lr=hyp['lr0'], betas=(hyp['momentum'], 0.999))  # adjust beta1 to momentum
+        else:
+            optimizer = optim.SGD(pg0, lr=hyp['lr0'], momentum=hyp['momentum'], nesterov=True)
+
+        optimizer.add_param_group({'params': pg1, 'weight_decay': hyp['weight_decay']})  # add pg1 with weight_decay
+        optimizer.add_param_group({'params': pg2})  # add pg2 (biases)
+        logger.info('Optimizer groups: %g .bias, %g conv.weight, %g other' % (len(pg2), len(pg1), len(pg0)))
+        del pg0, pg1, pg2
 
     # Scheduler https://arxiv.org/pdf/1812.01187.pdf
     # https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#OneCycleLR
@@ -360,6 +436,24 @@ def train(hyp, opt, device, tb_writer=None):
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
 
+        # Stage mode: re-apply BN eval for frozen scopes after model.train()
+        if stage_mode:
+            from utils.freeze_by_index import set_bn_eval_by_top_indices, get_scope_indices
+            if opt.stage == 'stage1_neck_tune':
+                # Backbone BN 保持 eval
+                backbone_indices = get_scope_indices(['BACKBONE_EARLY', 'BACKBONE_LATE'])
+                set_bn_eval_by_top_indices(model, backbone_indices, freeze_affine=True, verbose=False)
+            elif opt.stage == 'stage2_late_backbone_tune':
+                # EARLY BN 保持 eval
+                early_indices = get_scope_indices(['BACKBONE_EARLY'])
+                set_bn_eval_by_top_indices(model, early_indices, freeze_affine=True, verbose=False)
+                # LATE BN: Phase-based control
+                epoch_in_stage = epoch - start_epoch
+                apply_stage2_bn_phase(
+                    model, epoch_in_stage, opt.bn_phase1_epochs,
+                    bn_unfreeze_late=opt.bn_unfreeze_late, verbose=False
+                )
+
         # Update image weights (optional)
         if opt.image_weights:
             # Generate indices
@@ -391,7 +485,23 @@ def train(hyp, opt, device, tb_writer=None):
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
             # Warmup
-            if ni <= nw:
+            # Stage mode: use stage-based warmup restart
+            if stage_mode and stage_warmup_epochs > 0:
+                epoch_in_stage = epoch - start_epoch
+                ni_in_stage = i + nb * epoch_in_stage  # iterations since stage start
+                nw_stage = stage_warmup_epochs * nb  # stage warmup iterations
+
+                if ni_in_stage <= nw_stage:
+                    xi = [0, nw_stage]
+                    accumulate = max(1, np.interp(ni_in_stage, xi, [1, nbs / total_batch_size]).round())
+                    for j, x in enumerate(optimizer.param_groups):
+                        # Stage warmup: rise from 0 to target lr
+                        target_lr = x.get('initial_lr', x['lr']) * lf(epoch)
+                        x['lr'] = np.interp(ni_in_stage, xi, [0.0, target_lr])
+                        if 'momentum' in x:
+                            x['momentum'] = np.interp(ni_in_stage, xi, [hyp['warmup_momentum'], hyp['momentum']])
+            elif ni <= nw:
+                # Original warmup logic (non-stage mode)
                 xi = [0, nw]  # x interp
                 # model.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
                 accumulate = max(1, np.interp(ni, xi, [1, nbs / total_batch_size]).round())
@@ -628,6 +738,15 @@ if __name__ == '__main__':
     parser.add_argument('--class-aware-aug', action='store_true', help='Enable Stochastic Class-Aware Augmentation (requires --head-params)')
     parser.add_argument('--head-params', type=str, default='data/hyp.head_params.yaml', help='Path to head augmentation params YAML')
     parser.add_argument('--ignore-other-heads', action='store_true', help='Strategy A: Ignore other heads objects in objectness loss (multihead only)')
+    # Two-Stage Unfreezing 參數
+    parser.add_argument('--stage', type=str, default='', help='Stage mode: stage1_neck_tune, stage2_late_backbone_tune, or empty for original behavior')
+    parser.add_argument('--lr-mult-head', type=float, default=1.0, help='LR multiplier for HEAD scope')
+    parser.add_argument('--lr-mult-neck', type=float, default=0.3, help='LR multiplier for NECK scope')
+    parser.add_argument('--lr-mult-backbone', type=float, default=0.05, help='LR multiplier for LATE_BACKBONE scope (Stage2 only)')
+    parser.add_argument('--bn-phase1-epochs', type=int, default=20, help='Stage2: epochs to keep LATE BN in eval mode')
+    parser.add_argument('--bn-unfreeze-late', action='store_true', help='Stage2: allow LATE BN to train after Phase1')
+    parser.add_argument('--warmup-restart-epochs', type=int, default=-1, help='Warmup epochs for stage restart (-1 = auto: Stage1=5, Stage2=10)')
+    parser.add_argument('--print-stage-summary', action='store_true', default=True, help='Print stage summary at start')
     opt = parser.parse_args()
 
     # Set DDP variables
