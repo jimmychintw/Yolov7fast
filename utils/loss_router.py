@@ -46,6 +46,8 @@ class ComputeLossRouter:
 
         # 策略 A：是否忽略其他 Head 的物體
         self.ignore_other_heads = h.get('ignore_other_heads', False)
+        # Soft ignore weight: 0 = hard ignore (完全排除), >0 = soft ignore (降低權重)
+        self.ignore_weight = h.get('ignore_weight', 0.0)
 
         # BCE loss with label smoothing
         self.cp, self.cn = smooth_BCE(eps=h.get('label_smoothing', 0.0))
@@ -260,9 +262,29 @@ class ComputeLossRouter:
             if self.ignore_other_heads and all_targets is not None:
                 # 策略 A：忽略其他 Head 的物體位置
                 ignore_mask = self._get_ignore_mask(i, head_preds[i], head_id, all_targets)
-                # 只計算「正樣本」和「真背景」的 loss，忽略「其他 Head 的物體」
                 valid_positions = ~ignore_mask  # [bs, na, ny, nx]
-                obji = self.BCEobj(pi[..., 4][valid_positions], tobj[valid_positions])
+
+                if self.ignore_weight > 0:
+                    # Soft ignore: 被忽略的位置仍計算 loss，但權重較低
+                    n_valid = valid_positions.sum().item()
+                    n_ignored = ignore_mask.sum().item()
+
+                    if n_valid > 0 and n_ignored > 0:
+                        # 分別計算兩部分的 loss
+                        loss_valid = self.BCEobj(pi[..., 4][valid_positions], tobj[valid_positions])
+                        loss_ignored = self.BCEobj(pi[..., 4][ignore_mask], tobj[ignore_mask])
+                        # 加權平均：ignored positions 的貢獻降低
+                        total_n = n_valid + n_ignored
+                        obji = (loss_valid * n_valid + loss_ignored * n_ignored * self.ignore_weight) / total_n
+                    elif n_valid > 0:
+                        obji = self.BCEobj(pi[..., 4][valid_positions], tobj[valid_positions])
+                    elif n_ignored > 0:
+                        obji = self.BCEobj(pi[..., 4][ignore_mask], tobj[ignore_mask]) * self.ignore_weight
+                    else:
+                        obji = torch.tensor(0.0, device=device)
+                else:
+                    # Hard ignore: 完全排除被忽略的位置
+                    obji = self.BCEobj(pi[..., 4][valid_positions], tobj[valid_positions])
             else:
                 # 原有行為：計算所有位置的 obj loss
                 obji = self.BCEobj(pi[..., 4], tobj)

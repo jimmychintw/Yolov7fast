@@ -400,6 +400,7 @@ def train(hyp, opt, device, tb_writer=None):
     hyp['obj'] *= (imgsz / 640) ** 2 * 3. / nl  # scale to image size and layers
     hyp['label_smoothing'] = opt.label_smoothing
     hyp['ignore_other_heads'] = opt.ignore_other_heads  # Strategy A: ignore other heads in obj loss
+    hyp['ignore_weight'] = opt.ignore_weight  # Soft ignore weight (0=hard, 0.1=10% weight)
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.gr = 1.0  # iou loss ratio (obj_loss = 1.0 or iou)
@@ -738,6 +739,7 @@ if __name__ == '__main__':
     parser.add_argument('--class-aware-aug', action='store_true', help='Enable Stochastic Class-Aware Augmentation (requires --head-params)')
     parser.add_argument('--head-params', type=str, default='data/hyp.head_params.yaml', help='Path to head augmentation params YAML')
     parser.add_argument('--ignore-other-heads', action='store_true', help='Strategy A: Ignore other heads objects in objectness loss (multihead only)')
+    parser.add_argument('--ignore-weight', type=float, default=0.0, help='Soft ignore weight for other heads objects (0=hard ignore, 0.1=10%% weight). Only effective with --ignore-other-heads')
     # Two-Stage Unfreezing 參數
     parser.add_argument('--stage', type=str, default='', help='Stage mode: stage1_neck_tune, stage2_late_backbone_tune, or empty for original behavior')
     parser.add_argument('--lr-mult-head', type=float, default=1.0, help='LR multiplier for HEAD scope')
