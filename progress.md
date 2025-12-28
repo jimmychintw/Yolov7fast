@@ -1,6 +1,97 @@
 # 專案進度報告
 
-## 目前狀態：Person-only 雙實驗進行中 (2025-12-28)
+## 目前狀態：Full-Width 1B4N4H 訓練進行中 (2025-12-29)
+
+---
+
+## 1B1H Per-Head Baseline (正確版本)
+
+### 重要發現：test.py iou_thres 不一致問題
+
+訓練過程中的 validation 使用 `iou_thres=0.6`，但 test.py CLI 預設使用 `iou_thres=0.65`。
+這會導致約 1% 的 mAP 差異。**比較時必須使用相同的 iou_thres！**
+
+```python
+# test.py 函數 default (train.py 調用時使用)
+iou_thres=0.6
+
+# test.py CLI default (命令列執行時使用)
+parser.add_argument('--iou-thres', type=float, default=0.65, ...)
+```
+
+### 正確的 Per-Head Baseline
+
+使用 `python test.py --iou-thres 0.6 --verbose` 測試 `1b1h_best.pt`：
+
+| Head | 類別數 | mAP@0.5 Baseline | 說明 |
+|------|--------|------------------|------|
+| H0 | 1 | **0.6160** | person only |
+| H1 | 26 | **0.4503** | AntiConfusion Group 1 |
+| H2 | 26 | **0.4429** | AntiConfusion Group 2 |
+| H3 | 27 | **0.4051** | AntiConfusion Group 3 |
+| **整體** | 80 | **0.435** | 與 training log 吻合 |
+
+### 資料來源
+
+- 權重檔：`1b1h_best.pt` (來自 `runs/train/20251201_1b1h_500ep_bs128/weights/best.pt`)
+- 測試指令：`python test.py --weights 1b1h_best.pt --data data/coco320.yaml --img-size 320 --iou-thres 0.6 --verbose`
+- 計算腳本：`temp/calc_perhead_baseline.py`
+
+---
+
+## Full-Width 1B4N4H 訓練 (2025-12-29)
+
+### 實驗目的
+
+基於 1B1H 500ep 權重 (`1b1h_best.pt`)，使用 `--focus-head` 分別訓練各 Head 的類別。
+目標：驗證 Full-Width Neck+Head 專注訓練能否超越 1B1H baseline。
+
+### 訓練配置
+
+```bash
+# H0 (person, 1 class)
+python train.py --img-size 320 320 --batch-size 128 \
+    --weights 1b1h_best.pt --epochs 500 \
+    --data data/coco320.yaml \
+    --head-config data/coco_320_1b4h_anticonfusion.yaml \
+    --focus-head 0 --stage stage1_neck_tune \
+    --name head0_full_from1b1h_500ep
+
+# H1 (26 classes)
+python train.py ... --focus-head 1 --name head1_full_from1b1h_500ep
+
+# H2 (26 classes)
+python train.py ... --focus-head 2 --name head2_full_from1b1h_500ep
+```
+
+### 訓練進度 (2025-12-29 更新)
+
+| Head | Epochs | 當前 mAP | Baseline | 絕對進步 | 相對進步 | 伺服器 |
+|------|--------|----------|----------|----------|----------|--------|
+| H0 | 121/500 | 0.6407 | 0.6160 | **+2.47%** | +4.0% ✓ | 285 |
+| H1 | 108/500 | 0.4578 | 0.4503 | **+0.75%** | +1.7% ✓ | 9950 |
+| H2 | 111/500 | 0.4657 | 0.4429 | **+2.28%** | +5.1% ✓ | 2852 |
+| H3 | - | - | 0.4051 | - | - | 待訓練 |
+
+**結論：三個 Head 全部超越 1B1H baseline！**
+
+### 伺服器狀態
+
+| 伺服器 | 任務 | 進度 | 狀態 |
+|--------|------|------|------|
+| 285 | H0 Full-Width | 121/500 | 🔄 進行中 |
+| 9950 | H1 Full-Width | 108/500 | 🔄 進行中 |
+| 2852 | H2 Full-Width | 111/500 | 🔄 進行中 |
+
+### 數據檔案
+
+| 檔案 | 說明 |
+|------|------|
+| `temp/h0_from1b1h_results.txt` | H0 訓練結果 |
+| `temp/h1_from1b1h_results.txt` | H1 訓練結果 |
+| `temp/h2_from1b1h_results.txt` | H2 訓練結果 |
+| `temp/fullwidth_progress.png` | 進度對比圖表 |
+| `temp/calc_perhead_baseline.py` | Per-head baseline 計算腳本 |
 
 ---
 

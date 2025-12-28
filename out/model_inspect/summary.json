@@ -1,0 +1,20 @@
+{
+  "timestamp": "2025-12-24T15:33:52.409108",
+  "git_commit": "e72a55e",
+  "torch_version": "2.9.1",
+  "cuda_available": false,
+  "cfg": "cfg/training/yolov7-tiny.yaml",
+  "weights": "runs/train/20251201_1b1h_500ep_bs128/weights/best.pt",
+  "device": "cpu",
+  "img_size": 320,
+  "total_params": 6228762,
+  "total_modules": 263,
+  "top_level_modules": 78,
+  "bn_modules": 55,
+  "detect_info": {
+    "name": "model.77",
+    "type": "IDetect",
+    "index": 77,
+    "num_params": 230906
+  }
+}
