@@ -1,0 +1,124 @@
+# YOLOv7-tiny Half-Width with Adapter
+# 用於 Person-only Half-Width (Mode B) 實驗
+# Neck/Head 通道減半，Backbone 輸出點加入 1x1 adapter
+
+# parameters
+nc: 80  # number of classes (will be overridden to 1 for person-only)
+depth_multiple: 1.0  # model depth multiple
+width_multiple: 1.0  # layer channel multiple (Backbone 使用原始寬度)
+
+# anchors (optimized for 320x320)
+anchors:
+  - [5,8, 13,12, 14,32]  # P3/8
+  - [33,27, 35,59, 73,49]  # P4/16
+  - [69,123, 161,105, 222,188]  # P5/32
+
+# yolov7-tiny backbone (保持原始寬度)
+backbone:
+  # [from, number, module, args] c2, k=1, s=1, p=None, g=1, act=True
+  [[-1, 1, Conv, [32, 3, 2, None, 1, nn.LeakyReLU(0.1)]],  # 0-P1/2
+
+   [-1, 1, Conv, [64, 3, 2, None, 1, nn.LeakyReLU(0.1)]],  # 1-P2/4
+
+   [-1, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-2, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, Conv, [32, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, Conv, [32, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [[-1, -2, -3, -4], 1, Concat, [1]],
+   [-1, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 7
+
+   [-1, 1, MP, []],  # 8-P3/8
+   [-1, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-2, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, Conv, [64, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, Conv, [64, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [[-1, -2, -3, -4], 1, Concat, [1]],
+   [-1, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 14 - P3 backbone output (128 ch)
+
+   [-1, 1, MP, []],  # 15-P4/16
+   [-1, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-2, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, Conv, [128, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, Conv, [128, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [[-1, -2, -3, -4], 1, Concat, [1]],
+   [-1, 1, Conv, [256, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 21 - P4 backbone output (256 ch)
+
+   [-1, 1, MP, []],  # 22-P5/32
+   [-1, 1, Conv, [256, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-2, 1, Conv, [256, 1, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, Conv, [256, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [-1, 1, Conv, [256, 3, 1, None, 1, nn.LeakyReLU(0.1)]],
+   [[-1, -2, -3, -4], 1, Concat, [1]],
+   [-1, 1, Conv, [512, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 28 - P5 backbone output (512 ch)
+  ]
+
+# yolov7-tiny head (半寬: 通道數減半)
+# 原始: P3=64, P4=128, P5=256, Det=128/256/512
+# 半寬: P3=32, P4=64, P5=128, Det=64/128/256
+head:
+  # SPP (從 512 開始，輸出 128 = 256/2)
+  [[-1, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 29 - Adapter: 512->128
+   [-2, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 30
+   [-1, 1, SP, [5]],
+   [-2, 1, SP, [9]],
+   [-3, 1, SP, [13]],
+   [[-1, -2, -3, -4], 1, Concat, [1]],  # 34
+   [-1, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 35
+   [[-1, -7], 1, Concat, [1]],  # 36
+   [-1, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 37 - P5 neck (128 ch, was 256)
+
+   # FPN P4 (半寬)
+   [-1, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 38 (was 128)
+   [-1, 1, nn.Upsample, [None, 2, 'nearest']],  # 39
+   [21, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 40 - Adapter: route backbone P4 (256->64)
+   [[-1, -2], 1, Concat, [1]],  # 41
+
+   [-1, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 42 (was 64)
+   [-2, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 43
+   [-1, 1, Conv, [32, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 44
+   [-1, 1, Conv, [32, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 45
+   [[-1, -2, -3, -4], 1, Concat, [1]],  # 46
+   [-1, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 47 - P4 neck (64 ch, was 128)
+
+   # FPN P3 (半寬)
+   [-1, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 48 (was 64)
+   [-1, 1, nn.Upsample, [None, 2, 'nearest']],  # 49
+   [14, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 50 - Adapter: route backbone P3 (128->32)
+   [[-1, -2], 1, Concat, [1]],  # 51
+
+   [-1, 1, Conv, [16, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 52 (was 32)
+   [-2, 1, Conv, [16, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 53
+   [-1, 1, Conv, [16, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 54
+   [-1, 1, Conv, [16, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 55
+   [[-1, -2, -3, -4], 1, Concat, [1]],  # 56
+   [-1, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 57 - P3 neck (32 ch, was 64)
+
+   # PAN P4 (半寬)
+   [-1, 1, Conv, [64, 3, 2, None, 1, nn.LeakyReLU(0.1)]],  # 58 (was 128)
+   [[-1, 47], 1, Concat, [1]],  # 59
+
+   [-1, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 60 (was 64)
+   [-2, 1, Conv, [32, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 61
+   [-1, 1, Conv, [32, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 62
+   [-1, 1, Conv, [32, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 63
+   [[-1, -2, -3, -4], 1, Concat, [1]],  # 64
+   [-1, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 65 - P4 pan (64 ch, was 128)
+
+   # PAN P5 (半寬)
+   [-1, 1, Conv, [128, 3, 2, None, 1, nn.LeakyReLU(0.1)]],  # 66 (was 256)
+   [[-1, 37], 1, Concat, [1]],  # 67
+
+   [-1, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 68 (was 128)
+   [-2, 1, Conv, [64, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 69
+   [-1, 1, Conv, [64, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 70
+   [-1, 1, Conv, [64, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 71
+   [[-1, -2, -3, -4], 1, Concat, [1]],  # 72
+   [-1, 1, Conv, [128, 1, 1, None, 1, nn.LeakyReLU(0.1)]],  # 73 - P5 pan (128 ch, was 256)
+
+   # Detection heads (半寬)
+   [57, 1, Conv, [64, 3, 1, None, 1, nn.LeakyReLU(0.1)]],   # 74 - P3 det (64 ch, was 128)
+   [65, 1, Conv, [128, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 75 - P4 det (128 ch, was 256)
+   [73, 1, Conv, [256, 3, 1, None, 1, nn.LeakyReLU(0.1)]],  # 76 - P5 det (256 ch, was 512)
+
+   [[74,75,76], 1, IDetect, [nc, anchors]],   # Detect(P3, P4, P5)
+  ]

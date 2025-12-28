@@ -85,8 +85,25 @@ def train(hyp, opt, device, tb_writer=None):
         if wandb_logger.wandb:
             weights, epochs, hyp = opt.weights, opt.epochs, opt.hyp  # WandbLogger might update weights, epochs if resuming
 
-    nc = 1 if opt.single_cls else int(data_dict['nc'])  # number of classes
-    names = ['item'] if opt.single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
+    # Focus-class 處理 (Person-only 訓練)
+    focus_class_info = None
+    if hasattr(opt, 'focus_class') and opt.focus_class:
+        # 與 --heads 互斥檢查
+        if hasattr(opt, 'heads') and opt.heads > 0:
+            raise ValueError("--focus-class and --heads are mutually exclusive. "
+                           "Person-only mode requires single head.")
+        from utils.focus_class import parse_focus_class
+        focus_class_info = parse_focus_class(opt.focus_class, data_dict['names'])
+        nc = 1
+        names = [focus_class_info['name']]
+        logger.info(f"[Focus-Class] Enabled: '{focus_class_info['name']}' "
+                   f"(original id={focus_class_info['original_id']}) -> class 0, nc=1")
+    elif opt.single_cls:
+        nc = 1
+        names = ['item']
+    else:
+        nc = int(data_dict['nc'])  # number of classes
+        names = data_dict['names']  # class names
     assert len(names) == nc, '%g names found for nc=%g dataset in %s' % (len(names), nc, opt.data)  # check
 
     # Model
@@ -361,8 +378,9 @@ def train(hyp, opt, device, tb_writer=None):
                                             hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
                                             world_size=opt.world_size, workers=opt.workers,
                                             image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '),
-                                            class_aware_aug=class_aware_aug)
-    mlc = np.concatenate(dataset.labels, 0)[:, 0].max()  # max label class
+                                            class_aware_aug=class_aware_aug,
+                                            focus_class=focus_class_info)
+    mlc = np.concatenate(dataset.labels, 0)[:, 0].max() if len(dataset.labels) > 0 and any(len(l) > 0 for l in dataset.labels) else 0  # max label class
     nb = len(dataloader)  # number of batches
     assert mlc < nc, 'Label class %g exceeds nc=%g in %s. Possible class labels are 0-%g' % (mlc, nc, opt.data, nc - 1)
 
@@ -371,7 +389,8 @@ def train(hyp, opt, device, tb_writer=None):
         testloader = create_dataloader(test_path, imgsz_test, test_batch_size, gs, opt,  # testloader
                                        hyp=hyp, cache=opt.cache_images and not opt.notest, rect=True, rank=-1,
                                        world_size=opt.world_size, workers=opt.workers,
-                                       pad=0.5, prefix=colorstr('val: '))[0]
+                                       pad=0.5, prefix=colorstr('val: '),
+                                       focus_class=focus_class_info)[0]
 
         if not opt.resume:
             labels = np.concatenate(dataset.labels, 0)
@@ -749,6 +768,9 @@ if __name__ == '__main__':
     parser.add_argument('--bn-unfreeze-late', action='store_true', help='Stage2: allow LATE BN to train after Phase1')
     parser.add_argument('--warmup-restart-epochs', type=int, default=-1, help='Warmup epochs for stage restart (-1 = auto: Stage1=5, Stage2=10)')
     parser.add_argument('--print-stage-summary', action='store_true', default=True, help='Print stage summary at start')
+    # Person-only 與 Half-Width 參數
+    parser.add_argument('--focus-class', type=str, default='', help='Focus on single class: "person" or class ID (0). Remaps to class 0, nc=1')
+    parser.add_argument('--nh-width-mult', type=float, default=1.0, help='Neck/Head width multiplier (1.0=full, 0.5=half). Use with --focus-class for half-width experiments')
     opt = parser.parse_args()
 
     # Set DDP variables
@@ -772,6 +794,17 @@ if __name__ == '__main__':
     else:
         # opt.hyp = opt.hyp or ('hyp.finetune.yaml' if opt.weights else 'hyp.scratch.yaml')
         opt.data, opt.cfg, opt.hyp = check_file(opt.data), check_file(opt.cfg), check_file(opt.hyp)  # check files
+
+        # Half-Width 自動選擇配置檔
+        nh_width_mult = getattr(opt, 'nh_width_mult', 1.0)
+        if nh_width_mult == 0.5 and not opt.cfg:
+            half_cfg = 'cfg/training/yolov7-tiny-320-half-adapter.yaml'
+            if os.path.isfile(half_cfg):
+                opt.cfg = half_cfg
+                logger.info(f"[Half-Width] Auto-selected config: {opt.cfg}")
+            else:
+                logger.warning(f"[Half-Width] Config not found: {half_cfg}, using default")
+
         assert len(opt.cfg) or len(opt.weights), 'either --cfg or --weights must be specified'
         opt.img_size.extend([opt.img_size[-1]] * (2 - len(opt.img_size)))  # extend to 2 sizes (train, test)
         opt.name = 'evolve' if opt.evolve else opt.name

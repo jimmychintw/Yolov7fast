@@ -64,7 +64,7 @@ def exif_size(img):
 
 def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
                       rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='',
-                      class_aware_aug=None):  # Class-Aware Augmentation 模組 (可選)
+                      class_aware_aug=None, focus_class=None):  # Class-Aware Augmentation 模組 (可選), focus_class 單類別過濾
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
@@ -77,7 +77,8 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
                                       pad=pad,
                                       image_weights=image_weights,
                                       prefix=prefix,
-                                      class_aware_aug=class_aware_aug)  # Stochastic Class-Aware Augmentation
+                                      class_aware_aug=class_aware_aug,  # Stochastic Class-Aware Augmentation
+                                      focus_class=focus_class)  # Person-only 過濾
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
@@ -355,7 +356,7 @@ def img2label_paths(img_paths):
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
                  cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='',
-                 class_aware_aug=None):  # Class-Aware Augmentation 模組 (可選)
+                 class_aware_aug=None, focus_class=None):  # Class-Aware Augmentation 模組 (可選), focus_class 單類別過濾
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -366,6 +367,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.stride = stride
         self.path = path
         self.class_aware_aug = class_aware_aug  # Stochastic Class-Aware Augmentation
+        self.focus_class = focus_class  # Person-only 過濾
         #self.albumentations = Albumentations() if augment else None
 
         try:
@@ -417,6 +419,14 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         if single_cls:
             for x in self.labels:
                 x[:, 0] = 0
+
+        # Focus-class 過濾 (Person-only 訓練)
+        if focus_class is not None:
+            from utils.focus_class import filter_labels_by_class
+            self.labels = filter_labels_by_class(self.labels, focus_class)
+            # 注意: focus_class 過濾不移除圖像，只移除非目標類別的標籤
+            # 如果圖像沒有目標類別的物體，labels 會是空陣列，但圖像仍保留
+            # 這樣可以作為 negative samples
 
         n = len(shapes)  # number of images
         bi = np.floor(np.arange(n) / batch_size).astype(int)  # batch index
