@@ -85,19 +85,35 @@ def train(hyp, opt, device, tb_writer=None):
         if wandb_logger.wandb:
             weights, epochs, hyp = opt.weights, opt.epochs, opt.hyp  # WandbLogger might update weights, epochs if resuming
 
-    # Focus-class 處理 (Person-only 訓練)
+    # Focus-class 處理 (Person-only 訓練) 或 Focus-head 處理 (多類別 Head 訓練)
     focus_class_info = None
+    focus_head_info = None
+
     if hasattr(opt, 'focus_class') and opt.focus_class:
         # 與 --heads 互斥檢查
         if hasattr(opt, 'heads') and opt.heads > 0:
             raise ValueError("--focus-class and --heads are mutually exclusive. "
                            "Person-only mode requires single head.")
+        # 與 --focus-head 互斥檢查
+        if hasattr(opt, 'focus_head') and opt.focus_head >= 0:
+            raise ValueError("--focus-class and --focus-head are mutually exclusive.")
         from utils.focus_class import parse_focus_class
         focus_class_info = parse_focus_class(opt.focus_class, data_dict['names'])
         nc = 1
         names = [focus_class_info['name']]
         logger.info(f"[Focus-Class] Enabled: '{focus_class_info['name']}' "
                    f"(original id={focus_class_info['original_id']}) -> class 0, nc=1")
+    elif hasattr(opt, 'focus_head') and opt.focus_head >= 0:
+        # Focus-head: 保持 nc=80，只過濾 labels
+        if not (hasattr(opt, 'head_config') and opt.head_config):
+            raise ValueError("--focus-head requires --head-config to specify class assignments.")
+        from utils.focus_class import parse_focus_head
+        focus_head_info = parse_focus_head(opt.focus_head, opt.head_config, data_dict['names'])
+        nc = int(data_dict['nc'])  # 保持 80 類
+        names = data_dict['names']  # 保持完整名稱
+        logger.info(f"[Focus-Head] Enabled: Head {focus_head_info['head_idx']} ({focus_head_info['head_name']})")
+        logger.info(f"[Focus-Head] Training {focus_head_info['class_count']} classes, nc={nc} (original IDs preserved)")
+        logger.info(f"[Focus-Head] Classes: {focus_head_info['names'][:5]}..." if len(focus_head_info['names']) > 5 else f"[Focus-Head] Classes: {focus_head_info['names']}")
     elif opt.single_cls:
         nc = 1
         names = ['item']
@@ -379,7 +395,8 @@ def train(hyp, opt, device, tb_writer=None):
                                             world_size=opt.world_size, workers=opt.workers,
                                             image_weights=opt.image_weights, quad=opt.quad, prefix=colorstr('train: '),
                                             class_aware_aug=class_aware_aug,
-                                            focus_class=focus_class_info)
+                                            focus_class=focus_class_info,
+                                            focus_head=focus_head_info)
     mlc = np.concatenate(dataset.labels, 0)[:, 0].max() if len(dataset.labels) > 0 and any(len(l) > 0 for l in dataset.labels) else 0  # max label class
     nb = len(dataloader)  # number of batches
     assert mlc < nc, 'Label class %g exceeds nc=%g in %s. Possible class labels are 0-%g' % (mlc, nc, opt.data, nc - 1)
@@ -390,7 +407,8 @@ def train(hyp, opt, device, tb_writer=None):
                                        hyp=hyp, cache=opt.cache_images and not opt.notest, rect=True, rank=-1,
                                        world_size=opt.world_size, workers=opt.workers,
                                        pad=0.5, prefix=colorstr('val: '),
-                                       focus_class=focus_class_info)[0]
+                                       focus_class=focus_class_info,
+                                       focus_head=focus_head_info)[0]
 
         if not opt.resume:
             labels = np.concatenate(dataset.labels, 0)
@@ -770,6 +788,7 @@ if __name__ == '__main__':
     parser.add_argument('--print-stage-summary', action='store_true', default=True, help='Print stage summary at start')
     # Person-only 與 Half-Width 參數
     parser.add_argument('--focus-class', type=str, default='', help='Focus on single class: "person" or class ID (0). Remaps to class 0, nc=1')
+    parser.add_argument('--focus-head', type=int, default=-1, help='Focus on specific head from --head-config. 0=person(1cls), 1=group1(26cls), 2=group2(26cls), 3=group3(27cls). Keeps original COCO IDs, nc=80')
     parser.add_argument('--nh-width-mult', type=float, default=1.0, help='Neck/Head width multiplier (1.0=full, 0.5=half). Use with --focus-class for half-width experiments')
     opt = parser.parse_args()
 

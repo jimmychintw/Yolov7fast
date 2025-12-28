@@ -1,6 +1,6 @@
 # 專案進度報告
 
-## 目前狀態：Person-only 實驗進行中 (2025-12-28)
+## 目前狀態：Person-only 雙實驗進行中 (2025-12-28)
 
 ---
 
@@ -13,7 +13,7 @@
 ### 實驗配置
 
 ```bash
-python train.py --img-size 320 320 --batch-size 64 --test-batch-size 64 \
+python train.py --img-size 320 320 --batch-size 128 --test-batch-size 128 \
     --weights yolov7-tiny.pt \
     --epochs 500 \
     --data data/coco320.yaml \
@@ -21,14 +21,14 @@ python train.py --img-size 320 320 --batch-size 64 --test-batch-size 64 \
     --hyp data/hyp.scratch.tiny.noota.yaml \
     --device 0 --workers 16 \
     --project runs/train \
-    --name 1b1h_person_only_stage1_500ep2 \
+    --name 1b1h_person_only_stage1_500ep \
     --noautoanchor --cache-images \
     --focus-class person \
     --stage stage1_neck_tune \
     --lr-mult-head 1.0 \
     --lr-mult-neck 0.3 \
-    --lr-mult-backbone 0.05 \
-    --warmup-restart-epochs 5
+    --warmup-restart-epochs 5 \
+    --print-stage-summary
 ```
 
 ### 關鍵發現：V-Shape Recovery
@@ -86,7 +86,88 @@ python train.py --img-size 320 320 --batch-size 64 --test-batch-size 64 \
 
 | 伺服器 | 任務 | 進度 | 狀態 |
 |--------|------|------|------|
-| 285 | Person-only Stage1 500ep | 130/500 | 🔄 進行中 |
+| 285 | Person-only Full-Width | 145/500 | 🔄 進行中 |
+| 9950 | Person-only Half-Width | 待啟動 | ⏳ 就緒 |
+
+---
+
+## Person-only Half-Width 實驗 (2025-12-28)
+
+### 實驗目的
+
+與 Full-Width 實驗對照，測試 Neck/Head 通道減半對 Person-only 任務的影響。
+
+### 實驗配置
+
+```bash
+python train.py --img-size 320 320 --batch-size 128 --test-batch-size 128 \
+    --weights yolov7-tiny.pt \
+    --epochs 500 \
+    --data data/coco320.yaml \
+    --hyp data/hyp.scratch.tiny.noota.yaml \
+    --device 0 --workers 16 \
+    --project runs/train \
+    --name 1b1h_person_only_half_stage1_500ep \
+    --noautoanchor --cache-images \
+    --focus-class person \
+    --nh-width-mult 0.5 \
+    --stage stage1_neck_tune \
+    --lr-mult-head 1.0 \
+    --lr-mult-neck 0.3 \
+    --warmup-restart-epochs 5
+```
+
+### 架構差異
+
+| 位置 | Full-Width (285) | Half-Width (9950) |
+|------|------------------|-------------------|
+| Backbone | 128/256/512 ch | 128/256/512 ch (不變) |
+| Adapter | 無 | 1x1 Conv 降維 |
+| Neck P3/P4/P5 | 64/128/256 ch | **32/64/128 ch** |
+| Det P3/P4/P5 | 128/256/512 ch | **64/128/256 ch** |
+| 配置檔 | yolov7-tiny-320.yaml | yolov7-tiny-320-half-adapter.yaml |
+
+### 起點差異 (重要)
+
+| 實驗 | Backbone | Neck+Head 初始化 | 起點 mAP@0.5 |
+|------|----------|------------------|--------------|
+| **285 Full-Width** | 凍結 (pretrained) | **Pretrained** (1B1H 權重) | ~0.60 |
+| **9950 Half-Width** | 凍結 (pretrained) | **隨機初始化** (通道不匹配) | ~0.58 |
+
+> Half-Width 的 Neck+Head 通道數與 yolov7-tiny.pt 不匹配，無法載入預訓練權重，必須從頭訓練。
+
+### 預期比較
+
+| 指標 | Full-Width | Half-Width Stage1 | Half-Width Stage2 (計畫) |
+|------|------------|-------------------|-------------------------|
+| 參數量 | ~6M | ~3M | ~3M |
+| 起點 | Pretrained | Random | **Trained (Stage1 best)** |
+| mAP@0.5 | 0.65 | 0.61 | **0.64 (目標)** |
+| vs Baseline | +5.3% | -1.1% | **+3.7%** |
+
+### Half-Width Stage2 訓練計畫
+
+Stage1 完成後，使用 best.pt 重新訓練 500 epochs：
+
+```bash
+python train.py --img-size 320 320 --batch-size 128 --test-batch-size 128 \
+    --weights runs/train/1b1h_person_only_half_stage1_500ep/weights/best.pt \
+    --epochs 500 \
+    --data data/coco320.yaml \
+    --hyp data/hyp.scratch.tiny.noota.yaml \
+    --device 0 --workers 16 \
+    --project runs/train \
+    --name 1b1h_person_only_half_stage2_500ep \
+    --noautoanchor --cache-images \
+    --focus-class person \
+    --nh-width-mult 0.5 \
+    --stage stage1_neck_tune \
+    --lr-mult-head 1.0 \
+    --lr-mult-neck 0.3 \
+    --warmup-restart-epochs 10
+```
+
+**目標：mAP@0.5 = 0.64，超越 Baseline 2%+**
 
 ---
 
@@ -218,36 +299,102 @@ python train.py --img-size 320 320 --batch-size 128 --test-batch-size 128 \
 
 ## 伺服器資訊
 
-### 285 (當前使用)
+### 285 (Full-Width)
 ```
 SSH: ssh -p 45897 root@173.239.88.241 -L 8080:localhost:8080
-GPU: RTX 5090
-tmux: 4 windows (train, cpu, gpu, terminal)
-任務: Person-only Stage1 500ep (進行中)
+GPU: RTX 5090 (32GB)
+tmux: 4 windows (train, cpu, gpu, terminal) - 綠色狀態列
+任務: Person-only Full-Width Stage1 500ep (進行中)
 ```
 
-### 9950
+### 9950 (Half-Width)
 ```
 SSH: ssh -p 52652 root@79.117.62.136 -L 8080:localhost:8080
 GPU: RTX 5090 (32GB)
-狀態: 閒置，待命中
+tmux: 4 windows (train, cpu, gpu, terminal) - 黃色狀態列
+任務: Person-only Half-Width Stage1 500ep (待啟動)
 ```
+
+---
+
+## Focus-Head 多類別專注訓練 (2025-12-28)
+
+### 功能說明
+
+新增 `--focus-head` 參數，可指定訓練 AntiConfusion 配置中的某個 Head 的所有類別。
+
+### 與 Focus-Class 的差異
+
+| 項目 | --focus-class | --focus-head |
+|------|---------------|--------------|
+| 用途 | 單一類別訓練 (如 person) | 多類別 Head 訓練 |
+| nc | **1** (remap 到 class 0) | **80** (保持原始 COCO ID) |
+| 配置需求 | 無 | 需搭配 --head-config |
+| 範例 | --focus-class person | --focus-head 1 --head-config data/coco_320_1b4h_anticonfusion.yaml |
+
+### Head 分配 (AntiConfusion)
+
+| Head | 名稱 | 類別數 | 說明 |
+|------|------|--------|------|
+| 0 | Person_Specialist | 1 | person 獨立 |
+| 1 | AntiConfusion_Group_1 | 26 | car, motorcycle, airplane... |
+| 2 | AntiConfusion_Group_2 | 26 | bus, cat, sheep... |
+| 3 | AntiConfusion_Group_3 | 27 | bicycle, truck, dog... |
+
+### 使用範例
+
+```bash
+# Head 1 Full-Width (26 classes)
+python train.py --img-size 320 320 --batch-size 128 \
+    --weights yolov7-tiny.pt \
+    --epochs 500 \
+    --data data/coco320.yaml \
+    --head-config data/coco_320_1b4h_anticonfusion.yaml \
+    --focus-head 1 \
+    --stage stage1_neck_tune \
+    --name head1_full_stage1_500ep
+
+# Head 1 Half-Width (26 classes)
+python train.py --img-size 320 320 --batch-size 128 \
+    --weights yolov7-tiny.pt \
+    --epochs 500 \
+    --data data/coco320.yaml \
+    --head-config data/coco_320_1b4h_anticonfusion.yaml \
+    --focus-head 1 \
+    --nh-width-mult 0.5 \
+    --stage stage1_neck_tune \
+    --name head1_half_stage1_500ep
+```
+
+### 修改檔案
+
+| 檔案 | 修改內容 |
+|------|----------|
+| train.py | 新增 --focus-head 參數，處理邏輯 |
+| utils/focus_class.py | 新增 parse_focus_head, filter_labels_by_head |
+| utils/datasets.py | 支援 focus_head 參數傳遞 |
 
 ---
 
 ## 變更歷史
 
-### 2025-12-28 (Person-only 實驗)
+### 2025-12-28 (Focus-Head 功能實作)
+- 實作 `--focus-head` 參數，支援多類別 Head 訓練
+- 新增 `parse_focus_head()` 和 `filter_labels_by_head()` 函數
+- 保持 nc=80，只過濾 labels（不 remap class ID）
+- 測試驗證通過：語法檢查 ✓、parse_focus_head ✓、filter_labels_by_head ✓
+
+### 2025-12-28 (Person-only 雙實驗)
 - 實作 `--focus-class` 功能，支援單一類別訓練
-- 基於 yolov7-tiny.pt (1B1H) 啟動 Person-only 訓練
-- 發現 V-Shape Recovery 現象：
-  - Epoch 0-19: 快速上升 (0.598 → 0.630)
-  - Epoch 20-45: 適應期下降 (0.630 → 0.601)
-  - Epoch 45-109: 恢復上升 (0.601 → 0.638)
-- 最新結果 (Epoch 109/500):
-  - mAP@0.5: 0.638 (Baseline: 0.617, **+3.5%**)
-  - mAP@0.5:0.95: 0.381 (Baseline: 0.365, **+4.4%**)
-  - Total Loss: 0.087 → 0.067 (-22.5%)
+- 實作 `--nh-width-mult` 功能，支援 Neck/Head 通道縮放
+- **Full-Width 實驗 (285)**：
+  - 基於 yolov7-tiny.pt (1B1H) 啟動 Person-only 訓練
+  - 發現 V-Shape Recovery 現象
+  - 最新結果 (Epoch 145/500): mAP@0.5 = 0.639, +3.5% vs baseline
+- **Half-Width 實驗 (9950)**：
+  - Neck/Head 通道減半 (32/64/128 vs 64/128/256)
+  - 使用 1x1 Adapter 連接 Backbone
+  - 配置檔：yolov7-tiny-320-half-adapter.yaml
 - 結論：Neck+Head 可視為「需重訓練」，真正保護的是 Backbone 特徵
 - 數據檔案：temp/person_only_training_data.csv
 

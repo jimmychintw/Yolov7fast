@@ -98,6 +98,104 @@ def filter_labels_by_class(labels: list, focus_class_info: dict) -> list:
     return filtered
 
 
+def parse_focus_head(head_idx: int, head_config_path: str, class_names: list) -> dict:
+    """
+    解析 focus_head 參數，從 head_config 讀取類別列表
+
+    Args:
+        head_idx: Head 索引 (0-3)
+        head_config_path: head config YAML 檔案路徑
+        class_names: 完整 COCO 類別名稱列表 (80 類)
+
+    Returns:
+        dict: {
+            'head_idx': int,         # Head 索引
+            'head_name': str,        # Head 名稱
+            'original_ids': list,    # 原始 COCO 類別 ID 列表 (保持不變)
+            'names': list,           # 類別名稱列表
+            'class_count': int,      # 此 Head 的類別數量
+        }
+
+    Raises:
+        ValueError: 如果 head_idx 無效或配置檔不存在
+    """
+    import yaml
+    from pathlib import Path
+
+    config_path = Path(head_config_path)
+    if not config_path.exists():
+        raise ValueError(f"Head config file not found: {head_config_path}")
+
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # 檢查 head_assignments
+    if 'head_assignments' not in config:
+        raise ValueError(f"head_assignments not found in {head_config_path}")
+
+    head_key = f'head_{head_idx}'
+    if head_key not in config['head_assignments']:
+        raise ValueError(f"Head {head_idx} not found in config. Available: {list(config['head_assignments'].keys())}")
+
+    head_config = config['head_assignments'][head_key]
+    original_ids = head_config['classes']
+    head_name = head_config.get('name', f'Head_{head_idx}')
+
+    # 取得類別名稱
+    names = [class_names[cid] for cid in original_ids]
+
+    return {
+        'head_idx': head_idx,
+        'head_name': head_name,
+        'original_ids': original_ids,
+        'names': names,
+        'class_count': len(original_ids),
+    }
+
+
+def filter_labels_by_head(labels: list, focus_head_info: dict) -> list:
+    """
+    過濾 labels 只保留指定 Head 的類別
+    **保持原始 COCO ID**，不做 remap
+
+    Args:
+        labels: 原始 labels 列表，每個元素是 ndarray [N, 5] (class_id, x, y, w, h)
+        focus_head_info: parse_focus_head 返回的 dict
+
+    Returns:
+        filtered_labels: 過濾後的 labels，class ID 保持原始值
+    """
+    original_ids = set(focus_head_info['original_ids'])
+    filtered = []
+
+    total_before = 0
+    total_after = 0
+
+    for label in labels:
+        total_before += len(label)
+
+        if len(label) == 0:
+            filtered.append(np.zeros((0, 5), dtype=np.float32))
+            continue
+
+        # 只保留屬於此 Head 的類別 (使用 isin 語意)
+        mask = np.array([int(cid) in original_ids for cid in label[:, 0]])
+        if mask.sum() == 0:
+            filtered.append(np.zeros((0, 5), dtype=np.float32))
+            continue
+
+        kept = label[mask].copy()
+        # **保持原始 COCO ID，不做 remap**
+        filtered.append(kept)
+        total_after += len(kept)
+
+    logger.info(f"[Focus-Head] Filtered labels: {total_before} -> {total_after} "
+                f"(Head {focus_head_info['head_idx']}: {focus_head_info['head_name']}, "
+                f"{focus_head_info['class_count']} classes, original IDs preserved)")
+
+    return filtered
+
+
 def get_images_with_class(img_files: list, labels: list, focus_class_info: dict) -> tuple:
     """
     獲取包含指定類別的圖像列表
